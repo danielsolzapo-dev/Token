@@ -4,7 +4,7 @@
 
 Deixe o `AutoFarmTokenPirata.exe` numa pasta em que você possa gravar arquivos. O executável já inclui as bibliotecas e os modelos de leitura automática em português e inglês.
 
-Abra o Fortnite em janela sem bordas no lobby. Abra o programa, deixe Modo prévia marcado em Visão geral, clique em Iniciar e volte para o Fortnite. Veja as detecções na página Atividade. Depois de conferir, pare a sessão e desmarque a prévia para habilitar cliques e webhooks. **F8** pausa ou retoma. **F9** encerra a sessão.
+Abra o Fortnite em janela sem bordas no lobby. Clique em **Testar leitura** e volte ao jogo para conferir as detecções. Para jogar, pare essa sessão, clique em **Iniciar cliques** e volte ao Fortnite. **Atividade** mostra o envio do clique e a confirmação da fila quando ela aparece. **F8** pausa ou retoma. **F9** encerra a sessão.
 
 ## Recortes opcionais
 

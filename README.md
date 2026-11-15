@@ -2,7 +2,7 @@
 
 [Baixar o executável para Windows x64](https://github.com/danielsolzapo-dev/Token/releases/latest/download/AutoFarmTokenPirata.exe)
 
-Painel portátil para Windows x64. Abra `AutoFarmTokenPirata.exe`, clique em **Iniciar** e deixe o Fortnite em primeiro plano. A leitura automática do texto da tela já vem ligada. A primeira sessão começa em **Modo prévia**. Veja as detecções em **Atividade** antes de habilitar os cliques.
+Painel portátil para Windows x64. Abra `AutoFarmTokenPirata.exe` e deixe o Fortnite em primeiro plano. Use **Testar leitura** para conferir as detecções em **Atividade**. Use **Iniciar cliques** para agir no jogo.
 
 - **Fila e saída** controla o clique no lobby, o cronômetro por partida e a pausa programada.
 - **Movimento** oferece controles para o movimento aleatório, o inventário e o ônibus.

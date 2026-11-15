@@ -20,6 +20,7 @@ import numpy as np
 from PIL import Image, ImageGrab
 
 F8, F9, ESC = 0x77, 0x78, 0x1B
+MOUSE_ESQUERDO_PRESSIONAR, MOUSE_ESQUERDO_SOLTAR = 0x0002, 0x0004
 PASTA = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
 FUSOS = {
     "europa": "Europe/Paris",
@@ -28,6 +29,18 @@ FUSOS = {
     "oceania": "Australia/Sydney",
     "oriente_medio": "Asia/Bahrain",
 }
+
+
+class MouseInput(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class Input(ctypes.Structure):
+    # MOUSEINPUT é o maior membro da união INPUT no Windows.
+    _fields_ = [("type", wintypes.DWORD), ("mouse", MouseInput)]
 
 
 class Windows:
@@ -40,6 +53,14 @@ class Windows:
         api.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         api.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
         api.GetAsyncKeyState.restype = ctypes.c_short
+        api.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        api.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
+        api.WindowFromPoint.argtypes = [wintypes.POINT]
+        api.WindowFromPoint.restype = wintypes.HWND
+        api.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        api.GetAncestor.restype = wintypes.HWND
+        api.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
+        api.SendInput.restype = wintypes.UINT
         api.mouse_event.argtypes = [wintypes.DWORD, ctypes.c_long, ctypes.c_long,
                                     wintypes.DWORD, ctypes.c_size_t]
         api.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE,
@@ -64,13 +85,34 @@ class Windows:
         return bool(self.api.GetAsyncKeyState(codigo) & 0x8000)
 
     def clicar(self, janela, ponto):
-        if self.janela() != janela or not self.api.SetCursorPos(*ponto):
-            return False
+        hwnd, (esq, topo, dir_, base) = janela
+        x, y = ponto
+        if not (esq <= x < dir_ and topo <= y < base):
+            raise OSError("O ponto detectado ficou fora da janela do Fortnite.")
         if self.janela() != janela:
-            return False
-        self.api.mouse_event(2, 0, 0, 0, 0)
-        self.api.mouse_event(4, 0, 0, 0, 0)
+            raise OSError("O Fortnite perdeu o foco antes do clique.")
+        if not self.api.SetCursorPos(x, y):
+            raise OSError("O Windows recusou o movimento do cursor.")
+        time.sleep(0.12)
+        cursor = wintypes.POINT()
+        if (not self.api.GetCursorPos(ctypes.byref(cursor))
+                or max(abs(cursor.x - x), abs(cursor.y - y)) > 4):
+            raise OSError("O cursor não chegou ao ponto detectado.")
+        abaixo = self.api.WindowFromPoint(cursor)
+        if self.janela() != janela or self.api.GetAncestor(abaixo, 2) != hwnd:
+            raise OSError("O botão está coberto ou a janela perdeu o foco.")
+        if not self.botao_mouse(MOUSE_ESQUERDO_PRESSIONAR):
+            raise OSError("O Windows não enviou o clique ao jogo.")
+        try:
+            time.sleep(0.085)
+        finally:
+            if not self.botao_mouse(MOUSE_ESQUERDO_SOLTAR):
+                self.api.mouse_event(MOUSE_ESQUERDO_SOLTAR, 0, 0, 0, 0)
         return True
+
+    def botao_mouse(self, flag):
+        evento = Input(mouse=MouseInput(dwFlags=flag))
+        return self.api.SendInput(1, ctypes.byref(evento), ctypes.sizeof(Input)) == 1
 
     def pressionar(self, janela, teclas, duracao=0.06, giro=0):
         if self.janela() != janela:
@@ -320,13 +362,19 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
     total = carregar_contador()
     iniciou_sessao = time.monotonic()
     fase_fila = None
+    clique_fila_em = None
+    tentativas_fila = 0
     modo_passo = None
     avisos = set()
-    atraso_clique = {"jogar": 12, "lobby": 5, "resgatar": 3}
+    atraso_clique = {"jogar": 7, "lobby": 5, "resgatar": 3}
     log(f"Partidas registradas: {total}. F8 pausa/retoma, F9 encerra.")
     log("Coloque o Fortnite em primeiro plano. Aguardando a tela do jogo.")
     if not args.executar:
         log("Prévia: detecção sem cliques e sem mensagens no Discord.")
+    else:
+        log("Execução: cliques habilitados.")
+        if not fila:
+            log("Fila automática desligada em Fila e saída.")
 
     while not windows.tecla(F9) and not (parar and parar.is_set()):
         agora = time.monotonic()
@@ -363,7 +411,7 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
         if configurando is not None:
             modelos["passo_regiao"] = regioes[configurando][passo_regiao][0]
         atual = ocr.ler(tela, saindo=bool(partida.saida and fase_fila != "saindo"),
-                       confirmar="sair" in partida.saida) if ocr else {}
+                       confirmar="sair" in partida.saida, aguardando_fila=clique_fila_em is not None) if ocr else {}
         atual.update({nome: ponto for nome, recorte in modelos.items()
                       if (ponto := localizar(tela, recorte, args.limiar)) is not None})
         estaveis = {nome for nome, ponto in atual.items() if nome in anterior and
@@ -387,6 +435,13 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
                 executor.submit(enviar_discord, url, item, log=log)
         if windows.tecla(F9) or (parar and parar.is_set()):
             break
+
+        if clique_fila_em is not None and estaveis & {"fila_ativa", "partida", "onibus"}:
+            log("Fila confirmada pela tela do Fortnite.")
+            clique_fila_em = None
+            tentativas_fila = 0
+        if "jogar" in novos and args.executar:
+            log(f"Botão Jogar detectado em {atual['jogar']}.")
 
         if "lobby" in estaveis or "jogar" in estaveis:
             partida.encerrar()
@@ -440,6 +495,8 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
                     and (ocr or "esquadrao_ok" in botoes) and "esquadrao_ok" not in estaveis):
                 if "esquadrao_ok" not in atual and "modo_01" in botoes:
                     modo_passo = "modo_01"
+                elif "jogar" in novos:
+                    log("Jogar aguardando a confirmação de Esquadrão com Preencher.")
             elif regioes:
                 regiao = escolher_regiao(regioes, datetime.now(timezone.utc))
                 if regiao != regiao_aplicada and regiao is not None:
@@ -491,12 +548,21 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
             ok = True
         else:
             x, y = atual[acao]
-            ok = windows.clicar(janela, (area[0] + x, area[1] + y))
+            try:
+                ok = windows.clicar(janela, (area[0] + x, area[1] + y))
+            except OSError as erro:
+                log(f"Clique em {acao} não enviado. {erro}")
+                proxima_acao = time.monotonic() + 3
+                continue
         if not ok:
             continue
         proxima_acao = time.monotonic() + atraso_clique.get(acao, 1.25)
-        anterior = {}
         log(f"Ação: {acao}.")
+        if acao == "jogar":
+            clique_fila_em = time.monotonic()
+            tentativas_fila += 1
+            log(f"Clique em Jogar enviado ({tentativas_fila}). Aguardando a tela confirmar a fila.")
+        anterior = {}
         if acao in ("esc", "aba_saida", "sair", "confirmar_saida"):
             partida.saida.add(acao)
         if acao == "saltar_onibus":

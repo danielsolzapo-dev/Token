@@ -31,7 +31,7 @@ def normalizar(texto):
     return " ".join(re.findall(r"[A-Z0-9]+", ascii_texto))
 
 
-def identificar(linhas, largura, altura, *, saindo=False, confirmar=False):
+def identificar(linhas, largura, altura, *, saindo=False, confirmar=False, aguardando_fila=False):
     saida = {}
 
     def localizar(chave, expressoes, zona=lambda x, y: True):
@@ -82,8 +82,13 @@ def identificar(linhas, largura, altura, *, saindo=False, confirmar=False):
                  lambda x, y: y >= 0.40 and (x >= 0.55 or y >= 0.67)):
         return saida
 
-    em_fila = bool(textos & {"CANCELAR PAREAMENTO", "CANCEL MATCHMAKING", "PAREAMENTO", "MATCHMAKING"})
-    if not em_fila and localizar("jogar", {"JOGAR", "PRONTO", "PLAY", "READY UP"}, inferior):
+    rotulos_fila = {"CANCELAR PAREAMENTO", "CANCEL MATCHMAKING", "CANCEL READY", "PROCURANDO PARTIDA",
+                    "BUSCANDO PARTIDA", "FINDING MATCH", "MATCHMAKING", "PAREAMENTO", "NA FILA", "IN QUEUE"}
+    if aguardando_fila:
+        rotulos_fila.update({"CANCELAR", "CANCEL"})
+    if localizar("fila_ativa", rotulos_fila, inferior):
+        return saida
+    if localizar("jogar", {"JOGAR", "PRONTO", "PLAY", "READY UP"}, inferior):
         tem_squad = bool(textos & {"ESQUADRAO", "ESQUADROES", "SQUAD", "SQUADS"})
         tem_preencher = bool(textos & {"PREENCHER", "PREENCHER EQUIPE", "FILL", "FILL TEAM"})
         sem_preencher = any("NAO PREENCHER" in t or "NO FILL" in t or "DONT FILL" in t for t in textos)

@@ -163,9 +163,12 @@ class Painel:
         ttk.Label(rodape, text="F8 pausar / retomar   ·   F9 parar",
                   style="Muted.TLabel").pack(side="left")
         ttk.Button(rodape, text="Salvar ajustes", command=self.salvar).pack(side="right")
-        self.iniciar_botao = ttk.Button(rodape, text="Iniciar", style="Primary.TButton",
-                                         command=self.iniciar)
+        self.iniciar_botao = ttk.Button(rodape, text="Iniciar cliques", style="Primary.TButton",
+                                         command=lambda: self.iniciar(False))
         self.iniciar_botao.pack(side="right", padx=8)
+        self.previa_botao = ttk.Button(rodape, text="Testar leitura",
+                                       command=lambda: self.iniciar(True))
+        self.previa_botao.pack(side="right")
         self.parar_botao = ttk.Button(rodape, text="Parar", command=self.parar, state="disabled")
         self.parar_botao.pack(side="right")
         self.pausa_botao = ttk.Button(rodape, text="Pausar", command=self.pausar, state="disabled")
@@ -199,8 +202,7 @@ class Painel:
     def geral(self, painel):
         self.cabecalho(painel, "Visão geral", "Inicie uma sessão e coloque o Fortnite em primeiro plano. O painel lê o texto dos botões automaticamente.")
         ttk.Label(painel, textvariable=self.contador, style="Badge.TLabel").pack(anchor="w", pady=(0, 18))
-        self.escolha(painel, "Modo prévia", "previa")
-        self.nota(painel, "Na prévia, a atividade mostra as detecções. Os cliques e avisos do Discord ficam desativados.")
+        self.nota(painel, "Use Testar leitura para conferir detecções. Use Iniciar cliques para enviar as ações ao Fortnite.")
         ttk.Button(painel, text="Opções de leitura",
                    command=lambda: self.abrir("Leitura de tela")).pack(anchor="w", pady=18)
 
@@ -321,6 +323,7 @@ class Painel:
         self.status_versao.set(f"Baixando versão {release.versao}…")
         self.botao_instalar.configure(state="disabled")
         self.iniciar_botao.configure(state="disabled")
+        self.previa_botao.configure(state="disabled")
 
         def baixar():
             try:
@@ -454,10 +457,12 @@ class Painel:
         if url or arq.is_file():
             escrever(arq, url)
 
-    def iniciar(self):
+    def iniciar(self, previa=None):
         if self.download_em_andamento or (self.worker is not None and self.worker.is_alive()):
             return
         try:
+            if previa is not None:
+                self.variaveis["previa"].set(previa)
             dados, args = self.opcoes()
             botoes, recompensas, regioes = motor.carregar(self.pasta(), dados["regioes"],
                                                           exigir_pares=False, automatico=dados["ocr"])
@@ -473,6 +478,7 @@ class Painel:
         self.sinal_parar = Event()
         self.sinal_pausa = Event()
         self.iniciar_botao.configure(state="disabled")
+        self.previa_botao.configure(state="disabled")
         self.parar_botao.configure(state="normal")
         self.pausa_botao.configure(state="normal", text="Pausar")
         self.status.set("Iniciando")
@@ -549,6 +555,7 @@ class Painel:
                 self.pausa_botao.configure(text="Retomar" if valor == "Pausado" else "Pausar")
                 if valor == "Parado":
                     self.iniciar_botao.configure(state="normal")
+                    self.previa_botao.configure(state="normal")
                     self.pausa_botao.configure(state="disabled")
                     self.parar_botao.configure(state="disabled")
         except Empty:
@@ -596,6 +603,7 @@ class Painel:
             self.download_em_andamento = False
             self.status_versao.set(f"Versão {VERSAO} · falha ao baixar ou instalar")
             self.iniciar_botao.configure(state="normal")
+            self.previa_botao.configure(state="normal")
             self.botao_instalar.configure(state="normal")
             self.registrar(f"Atualização: {valor}")
 
