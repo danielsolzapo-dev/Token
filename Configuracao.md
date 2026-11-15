@@ -2,9 +2,13 @@
 
 ## Abrir no Windows
 
-Deixe o `AutoFarmTokenPirata.exe` numa pasta em que você possa gravar arquivos. O executável já inclui o Python e as bibliotecas. Crie uma pasta `botoes` ao lado dele e coloque nela os recortes abaixo. Use a Ferramenta de Captura do Windows e mantenha a resolução, a escala, o idioma e o filtro de cores usados nas capturas. Salve cada recorte sem o cursor sobre o botão.
+Deixe o `AutoFarmTokenPirata.exe` numa pasta em que você possa gravar arquivos. O executável já inclui as bibliotecas e os modelos de leitura automática em português e inglês.
 
 Abra o Fortnite em janela sem bordas no lobby. Abra o programa, deixe Modo prévia marcado em Visão geral, clique em Iniciar e volte para o Fortnite. Veja as detecções na página Atividade. Depois de conferir, pare a sessão e desmarque a prévia para habilitar cliques e webhooks. **F8** pausa ou retoma. **F9** encerra a sessão.
+
+## Recortes opcionais
+
+Os controles comuns são detectados pelo texto na tela. Para corrigir uma detecção ou usar o modo de recortes, importe os PNGs em **Leitura de tela**. Use a resolução, o idioma, a escala e o filtro de cores do jogo. Salve os recortes sem o cursor sobre o botão.
 
 | Arquivo em `botoes` | O que recortar |
 |---|---|
@@ -22,7 +26,7 @@ Abra o Fortnite em janela sem bordas no lobby. Abra o programa, deixe Modo prév
 | `aba_tesouro.png` e `aba_jogar.png` | O sinal de que a aba Tesouro está ativa e o botão Jogar de navegação no topo. |
 | `suspensao.png` | Um trecho exclusivo do aviso de suspensão, para pausar e avisar pelo webhook. |
 
-`jogar.png` e `lobby.png` são obrigatórios. Os pares `partida.png` e `sair.png`, e `tesouro.png` e `resgatar.png`, habilitam a saída por tempo e o resgate. As outras imagens habilitam ações opcionais. Use recortes com o controle pretendido no centro, de pelo menos 12 × 12 pixels.
+Com a leitura automática desligada, `jogar.png` e `lobby.png` são obrigatórios. Os pares `partida.png` e `sair.png`, e `tesouro.png` e `resgatar.png`, habilitam a saída por tempo e o resgate nesse modo. Use recortes de pelo menos 12 × 12 pixels, com o controle no centro.
 
 O cronômetro padrão dispara a saída após 8 minutos desde a primeira detecção do HUD ou do ônibus. Na ausência do botão de fim de partida, o macro abre o menu e espera o botão de saída aparecer, sem alternar o Esc continuamente. O contador aumenta quando uma partida é detectada e fica salvo em `partidas.json`. O movimento usa W/A/D, Ctrl esquerdo, Espaço e o mouse. O macro solta as teclas ao terminar cada movimento.
 
@@ -30,7 +34,11 @@ O cronômetro padrão dispara a saída após 8 minutos desde a primeira detecç�
 
 No Discord, copie a URL de um webhook do canal de texto de destino e cole-a em `webhook_discord.txt`, ao lado do executável. Como alternativa, defina a variável de ambiente `DISCORD_WEBHOOK_URL`. Trate a URL como segredo.
 
-Para identificar os itens pelo nome, coloque recortes da notificação específica de cada item em `botoes/recompensas`. Por exemplo, `Token da Loja Pirata.png`. O nome do arquivo vira o nome no aviso. O título Tesouro Encontrado pode gerar um aviso genérico quando o item é desconhecido. Cada item reconhecido gera no máximo um aviso por partida. O aviso registra uma detecção de tela.
+O OCR tenta ler os nomes das recompensas conhecidas. Para adicionar um item específico, importe o recorte da notificação em **Tesouro e Discord**. O título Tesouro Encontrado pode gerar um aviso genérico. Cada item reconhecido gera no máximo um aviso por partida.
+
+## Atualizações
+
+A partir da versão 1.1.0, o app consulta o GitHub ao abrir e a cada 30 minutos com a opção automática ligada. Ele espera a sessão parar, verifica o SHA-256 do download e reinicia o painel. Use **Atualizações → Verificar agora** para consultar manualmente.
 
 ## Esquadrão com preenchimento
 

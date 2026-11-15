@@ -104,8 +104,8 @@ def imagem(caminho):
     return recorte
 
 
-def carregar(pasta, usar_regioes=True, exigir_pares=True):
-    botoes = {nome: imagem(pasta / f"{nome}.png") for nome in ("jogar", "lobby")}
+def carregar(pasta, usar_regioes=True, exigir_pares=True, automatico=False):
+    botoes = {nome: imagem(pasta / f"{nome}.png") for nome in ("jogar", "lobby")} if not automatico else {}
     for caminho in pasta.glob("*.png"):
         if caminho.stem not in botoes:
             botoes[caminho.stem] = imagem(caminho)
@@ -303,7 +303,7 @@ def gravar_contador(total):
 
 
 def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
-              *, parar=None, alternar=None, log=print, estado=lambda _: None):
+              *, parar=None, alternar=None, log=print, estado=lambda _: None, ocr=None):
     ativo = parar is not None or getattr(sys, "frozen", False) or not args.executar
     estado("Ativo" if ativo else "Pausado")
     fila = getattr(args, "fila", True)
@@ -362,9 +362,12 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
         modelos.update({f"item:{nome}": img for nome, img in recompensas.items()})
         if configurando is not None:
             modelos["passo_regiao"] = regioes[configurando][passo_regiao][0]
-        atual = {nome: ponto for nome, recorte in modelos.items()
-                 if (ponto := localizar(tela, recorte, args.limiar)) is not None}
-        estaveis = {nome for nome, ponto in atual.items() if anterior.get(nome) == ponto}
+        atual = ocr.ler(tela, saindo=bool(partida.saida and fase_fila != "saindo"),
+                       confirmar="sair" in partida.saida) if ocr else {}
+        atual.update({nome: ponto for nome, recorte in modelos.items()
+                      if (ponto := localizar(tela, recorte, args.limiar)) is not None})
+        estaveis = {nome for nome, ponto in atual.items() if nome in anterior and
+                    max(abs(a - b) for a, b in zip(ponto, anterior[nome])) <= (8 if ocr else 0)}
         novos = estaveis - avisos
         avisos = estaveis
         anterior = atual
@@ -434,7 +437,7 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
             if not fila:
                 continue
             if (getattr(args, "confirmar_modo", True)
-                    and "esquadrao_ok" in botoes and "esquadrao_ok" not in estaveis):
+                    and (ocr or "esquadrao_ok" in botoes) and "esquadrao_ok" not in estaveis):
                 if "esquadrao_ok" not in atual and "modo_01" in botoes:
                     modo_passo = "modo_01"
             elif regioes:

@@ -21,8 +21,13 @@ jobs:
         with:
           python-version: '3.14'
       - run: python -m pip install -r requirements.txt
-      - run: python -m py_compile app.py macro_token_pirata.py
-      - run: python -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-data tzdata app.py
+      - run: python -m py_compile app.py macro_token_pirata.py reconhecimento.py atualizacao.py
+      - run: python preparar_ocr.py
+      - run: python -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-data tzdata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" app.py
+      - shell: pwsh
+        run: |
+          $smoke = Start-Process -FilePath "dist/AutoFarmTokenPirata.exe" -ArgumentList "--verificar-build" -WindowStyle Hidden -Wait -PassThru
+          exit $smoke.ExitCode
       - uses: actions/upload-artifact@v4
         with:
           name: AutoFarmTokenPirata-Windows
@@ -33,11 +38,9 @@ jobs:
           BUILD_REF: ${{ github.ref_name }}
         shell: pwsh
         run: |
-          if ($env:BUILD_REF -eq 'main') {
-            $tag = 'v1.0.0'
-          } else {
-            $tag = $env:BUILD_REF
-          }
+          $version = python -c "from versao import VERSAO; print(VERSAO)"
+          $tag = "v$version"
+          if ($env:BUILD_REF -ne 'main' -and $env:BUILD_REF -ne $tag) { throw "A tag e a versão do app precisam corresponder." }
           gh release view $tag --json tagName 2>$null
           if ($LASTEXITCODE -eq 0) { exit 0 }
           gh release create $tag dist/AutoFarmTokenPirata.exe --target $env:GITHUB_SHA --title "Auto Farm $tag" --generate-notes

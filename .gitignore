@@ -9,3 +9,6 @@ ajustes.json
 partidas.json
 webhook_discord.txt
 *.tmp
+modelos/
+.token-update-*
+*.previous

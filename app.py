@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import sys
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -11,6 +12,8 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 from types import SimpleNamespace
 
 import macro_token_pirata as motor
+import atualizacao
+from versao import VERSAO
 
 BG = "#0d131d"
 PAINEL = "#161f2c"
@@ -25,7 +28,7 @@ PADROES = {
     "movimento": True, "resgatar": True, "discord": False, "regioes": False,
     "squad": False, "skins_padrao": "2", "limiar": "0.92", "previa": True,
     "botoes": "", "confirmar_modo": False, "fechar_inventario": True,
-    "saltar_onibus": True,
+    "saltar_onibus": True, "ocr": True, "auto_atualizar": True,
 }
 CAPTURAS = {
     "Jogar": "jogar.png", "Voltar ao lobby (fim)": "lobby.png",
@@ -90,11 +93,17 @@ class Painel:
         self.worker = None
         self.eventos = SimpleQueue()
         self.encerrando = False
+        self.busca_em_andamento = False
+        self.download_em_andamento = False
+        self.release = None
+        self.preparado = None
+        self.atualizar_quando_parar = False
         self.variaveis = {}
         for nome, valor in ler_configuracao().items():
             tipo = tk.BooleanVar if isinstance(PADROES[nome], bool) else tk.StringVar
             self.variaveis[nome] = tipo(janela, value=valor)
         self.status = tk.StringVar(janela, "Parado")
+        self.status_versao = tk.StringVar(janela, f"Versão {VERSAO}")
         self.contador = tk.StringVar(janela, f"{motor.carregar_contador()} partidas")
         self.paginas = {}
         self.navegacao = {}
@@ -115,6 +124,8 @@ class Painel:
         self.abrir("Visão geral")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         janela.after(100, self.atualizar)
+        if getattr(sys, "frozen", False):
+            janela.after(1800, self.verificacao_periodica)
 
     def construir(self):
         janela = self.janela
@@ -137,7 +148,8 @@ class Painel:
             ("Visão geral", self.geral), ("Fila e saída", self.fila),
             ("Movimento", self.movimento), ("Tesouro e Discord", self.tesouro),
             ("Esquadrão", self.esquadrao), ("Região de dia", self.regioes),
-            ("Recortes", self.recortes), ("Atividade", self.atividade),
+            ("Leitura de tela", self.recortes), ("Atividade", self.atividade),
+            ("Atualizações", self.pagina_atualizacoes),
         ):
             botao = ttk.Button(lado, text=nome, style="Nav.TButton",
                                command=lambda pagina=nome: self.abrir(pagina))
@@ -185,12 +197,12 @@ class Painel:
         return campo
 
     def geral(self, painel):
-        self.cabecalho(painel, "Visão geral", "Configure os recortes, inicie a sessão e coloque o Fortnite em primeiro plano.")
+        self.cabecalho(painel, "Visão geral", "Inicie uma sessão e coloque o Fortnite em primeiro plano. O painel lê o texto dos botões automaticamente.")
         ttk.Label(painel, textvariable=self.contador, style="Badge.TLabel").pack(anchor="w", pady=(0, 18))
         self.escolha(painel, "Modo prévia", "previa")
         self.nota(painel, "Na prévia, a atividade mostra as detecções. Os cliques e avisos do Discord ficam desativados.")
-        ttk.Button(painel, text="Configurar recortes",
-                   command=lambda: self.abrir("Recortes")).pack(anchor="w", pady=18)
+        ttk.Button(painel, text="Opções de leitura",
+                   command=lambda: self.abrir("Leitura de tela")).pack(anchor="w", pady=18)
 
     def fila(self, painel):
         self.cabecalho(painel, "Fila e saída", "Controle o fluxo do lobby e o tempo da sessão.")
@@ -248,7 +260,8 @@ class Painel:
         self.nota(painel, "Cada região precisa de um passo de verificação. Use uma imagem da opção já aplicada e inclua os passos para voltar ao lobby.")
 
     def recortes(self, painel):
-        self.cabecalho(painel, "Recortes", "Importe arquivos PNG feitos na resolução e escala usadas no Fortnite.")
+        self.cabecalho(painel, "Leitura de tela", "A leitura automática funciona localmente. Recortes são opcionais para personalizar ou corrigir detecções.")
+        self.escolha(painel, "Reconhecer botões automaticamente (OCR)", "ocr")
         campo = self.entrada(painel, "Pasta", self.variaveis["botoes"], 42)
         campo.bind("<FocusOut>", lambda _: self.ler_areas())
         ttk.Button(painel, text="Escolher pasta", command=self.escolher_pasta).pack(anchor="w", pady=6)
@@ -258,7 +271,65 @@ class Painel:
                    command=lambda: self.importar(self.pasta() / CAPTURAS[self.recorte.get()])).pack(anchor="w")
         ttk.Button(painel, text="Abrir pasta de recortes", command=self.abrir_pasta).pack(anchor="w", pady=8)
         self.entrada(painel, "Similaridade mínima (0–1)", self.variaveis["limiar"])
-        self.nota(painel, "Jogar e Voltar ao Lobby são obrigatórios. Centralize o botão no recorte e evite incluir o cursor.")
+        self.nota(painel, "Jogar e Voltar ao Lobby só exigem recortes quando a leitura automática está desligada.")
+
+    def pagina_atualizacoes(self, painel):
+        self.cabecalho(painel, "Atualizações", "O aplicativo verifica as releases do GitHub e confere o hash antes de substituir o executável.")
+        ttk.Label(painel, textvariable=self.status_versao, style="Badge.TLabel").pack(anchor="w", pady=(0, 14))
+        self.escolha(painel, "Instalar automaticamente fora de uma sessão", "auto_atualizar")
+        botoes = ttk.Frame(painel)
+        botoes.pack(anchor="w", pady=10)
+        ttk.Button(botoes, text="Verificar agora", command=lambda: self.verificar_atualizacao(True)).pack(side="left")
+        self.botao_instalar = ttk.Button(botoes, text="Atualizar", state="disabled",
+                                         command=self.agendar_atualizacao)
+        self.botao_instalar.pack(side="left", padx=8)
+        self.nota(painel, "O painel reinicia depois da atualização. Salve os ajustes para reutilizá-los.")
+
+    def verificacao_periodica(self):
+        if self.variaveis["auto_atualizar"].get():
+            self.verificar_atualizacao(False)
+        self.janela.after(30 * 60 * 1000, self.verificacao_periodica)
+
+    def verificar_atualizacao(self, manual):
+        if self.busca_em_andamento or self.download_em_andamento or self.preparado:
+            return
+        if not getattr(sys, "frozen", False):
+            self.status_versao.set(f"Versão {VERSAO} · execute o .exe para atualizar")
+            return
+        self.busca_em_andamento = True
+        if manual:
+            self.status_versao.set("Verificando releases…")
+
+        def consultar():
+            try:
+                self.eventos.put(("release", atualizacao.buscar()))
+            except (OSError, ValueError) as erro:
+                self.eventos.put(("erro_busca", str(erro)))
+
+        Thread(target=consultar, daemon=True).start()
+
+    def agendar_atualizacao(self):
+        if self.release is None:
+            return
+        self.atualizar_quando_parar = True
+        self.status_versao.set(f"Versão {self.release.versao} disponível · aguardando sessão parar")
+
+    def baixar_atualizacao(self):
+        release = self.release
+        self.download_em_andamento = True
+        self.atualizar_quando_parar = False
+        self.status_versao.set(f"Baixando versão {release.versao}…")
+        self.botao_instalar.configure(state="disabled")
+        self.iniciar_botao.configure(state="disabled")
+
+        def baixar():
+            try:
+                caminho = atualizacao.baixar(release, motor.PASTA)
+                self.eventos.put(("preparado", (caminho, release)))
+            except (OSError, ValueError) as erro:
+                self.eventos.put(("erro_download", str(erro)))
+
+        Thread(target=baixar).start()
 
     def atividade(self, painel):
         self.cabecalho(painel, "Atividade", "Acompanhe as detecções, ações e avisos do macro.")
@@ -384,11 +455,12 @@ class Painel:
             escrever(arq, url)
 
     def iniciar(self):
-        if self.worker is not None and self.worker.is_alive():
+        if self.download_em_andamento or (self.worker is not None and self.worker.is_alive()):
             return
         try:
             dados, args = self.opcoes()
-            botoes, recompensas, regioes = motor.carregar(self.pasta(), dados["regioes"], exigir_pares=False)
+            botoes, recompensas, regioes = motor.carregar(self.pasta(), dados["regioes"],
+                                                          exigir_pares=False, automatico=dados["ocr"])
             squad = motor.carregar_squad(self.pasta()) if dados["squad"] else None
             self.validar_capturas(dados, botoes, recompensas, regioes, squad)
             self.persistir(dados)
@@ -405,35 +477,40 @@ class Painel:
         self.pausa_botao.configure(state="normal", text="Pausar")
         self.status.set("Iniciando")
         self.abrir("Atividade")
-        self.worker = Thread(target=self.rodar, args=(botoes, recompensas, regioes, squad, args, url))
+        self.worker = Thread(target=self.rodar, args=(botoes, recompensas, regioes, squad, args, url, dados["ocr"]))
         self.worker.start()
 
     def validar_capturas(self, dados, botoes, recompensas, regioes, squad):
         if dados["previa"]:
             return
-        if dados["cronometrar"] and not {"partida", "sair"} <= botoes.keys():
+        if not dados["ocr"] and dados["cronometrar"] and not {"partida", "sair"} <= botoes.keys():
             raise ValueError("Importe HUD em partida e Sair da partida, ou desative a saída por tempo.")
-        if dados["movimento"] and "partida" not in botoes:
+        if not dados["ocr"] and dados["movimento"] and "partida" not in botoes:
             raise ValueError("Importe HUD em partida para usar movimentos.")
-        if dados["resgatar"] and not {"tesouro", "resgatar"} <= botoes.keys():
+        if not dados["ocr"] and dados["resgatar"] and not {"tesouro", "resgatar"} <= botoes.keys():
             raise ValueError("Importe Tesouro Encontrado e Botão Resgatar, ou desative o resgate.")
         if dados["regioes"] and not regioes:
             raise ValueError("Importe uma sequência de seleção de região.")
         if dados["squad"] and (not squad or not (squad[1] or squad[2])):
             raise ValueError("Configure as áreas e importe um recorte de ausência ou de skin padrão.")
-        if dados["confirmar_modo"] and "esquadrao_ok" not in botoes:
+        if not dados["ocr"] and dados["confirmar_modo"] and "esquadrao_ok" not in botoes:
             raise ValueError("Importe Esquadrão com Preencher para conferir o modo no lobby.")
-        if dados["discord"] and not recompensas and "tesouro" not in botoes:
+        if not dados["ocr"] and dados["discord"] and not recompensas and "tesouro" not in botoes:
             raise ValueError("Importe um recorte de recompensa ou de Tesouro Encontrado.")
 
-    def rodar(self, botoes, recompensas, regioes, squad, args, url):
+    def rodar(self, botoes, recompensas, regioes, squad, args, url, usar_ocr):
         try:
+            ocr = None
+            if usar_ocr:
+                from reconhecimento import Reconhecedor
+                self.eventos.put(("log", "Carregando leitura automática…"))
+                ocr = Reconhecedor()
             with ThreadPoolExecutor(max_workers=1) as executor:
                 motor.monitorar(self.windows, botoes, recompensas, regioes, squad, args, url, executor,
                                 parar=self.sinal_parar, alternar=self.sinal_pausa,
                                 log=lambda msg: self.eventos.put(("log", msg)),
-                                estado=lambda estado: self.eventos.put(("estado", estado)))
-        except (OSError, ValueError, motor.cv2.error) as erro:
+                                estado=lambda estado: self.eventos.put(("estado", estado)), ocr=ocr)
+        except Exception as erro:
             self.eventos.put(("log", f"Erro: {erro}"))
         finally:
             self.eventos.put(("estado", "Parado"))
@@ -458,6 +535,9 @@ class Painel:
         try:
             while True:
                 tipo, valor = self.eventos.get_nowait()
+                if tipo in {"release", "erro_busca", "preparado", "erro_download"}:
+                    self.receber_atualizacao(tipo, valor)
+                    continue
                 if tipo == "log":
                     self.registrar(valor)
                     if valor.startswith("Partida "):
@@ -473,10 +553,51 @@ class Painel:
                     self.parar_botao.configure(state="disabled")
         except Empty:
             pass
-        if self.encerrando and (self.worker is None or not self.worker.is_alive()):
+        sessao_terminou = self.worker is None or not self.worker.is_alive()
+        if sessao_terminou and not self.download_em_andamento and self.preparado:
+            caminho, release = self.preparado
+            try:
+                atualizacao.iniciar_troca(caminho, release)
+            except OSError as erro:
+                caminho.unlink(missing_ok=True)
+                self.receber_atualizacao("erro_download", str(erro))
+                self.preparado = None
+            else:
+                self.janela.destroy()
+                return
+        if (sessao_terminou and self.atualizar_quando_parar and self.release
+                and not self.download_em_andamento and not self.encerrando):
+            self.baixar_atualizacao()
+        if self.encerrando and sessao_terminou and not self.download_em_andamento:
             self.janela.destroy()
         else:
             self.janela.after(100, self.atualizar)
+
+    def receber_atualizacao(self, tipo, valor):
+        if tipo == "release":
+            self.busca_em_andamento = False
+            self.release = valor
+            self.botao_instalar.configure(state="normal" if valor else "disabled")
+            if valor:
+                self.status_versao.set(f"Versão {valor.versao} disponível")
+                if self.variaveis["auto_atualizar"].get():
+                    self.agendar_atualizacao()
+            else:
+                self.status_versao.set(f"Versão {VERSAO} · atualizada")
+        elif tipo == "erro_busca":
+            self.busca_em_andamento = False
+            self.status_versao.set(f"Versão {VERSAO} · falha ao verificar")
+            self.registrar(f"Atualização: {valor}")
+        elif tipo == "preparado":
+            self.download_em_andamento = False
+            self.preparado = valor
+            self.status_versao.set("Atualização verificada. Reiniciando…")
+        elif tipo == "erro_download":
+            self.download_em_andamento = False
+            self.status_versao.set(f"Versão {VERSAO} · falha ao baixar ou instalar")
+            self.iniciar_botao.configure(state="normal")
+            self.botao_instalar.configure(state="normal")
+            self.registrar(f"Atualização: {valor}")
 
     def fechar(self):
         self.encerrando = True
@@ -485,6 +606,22 @@ class Painel:
 
 
 def main():
+    if sys.argv[1:] == ["--verificar-build"]:
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFont
+        from reconhecimento import Reconhecedor
+
+        tela = Image.new("RGB", (768, 432), "#1b2b61")
+        fonte = ImageFont.truetype(str(Path(os.environ["WINDIR"]) / "Fonts" / "arialbd.ttf"), 44)
+        ImageDraw.Draw(tela).text((78, 350), "JOGAR", fill="white", font=fonte)
+        if "jogar" not in Reconhecedor().ler(np.asarray(tela)):
+            raise RuntimeError("Falha na leitura de tela do executável.")
+        return
+    if len(sys.argv) == 4 and sys.argv[1] == "--aplicar-atualizacao":
+        atualizacao.aplicar_troca(sys.argv[2], sys.argv[3])
+        return
+    if len(sys.argv) == 3 and sys.argv[1] == "--limpar-atualizacao":
+        Thread(target=atualizacao.limpar, args=(sys.argv[2],), daemon=True).start()
     windows = motor.Windows()
     janela = tk.Tk()
     Painel(janela, windows)
