@@ -12,6 +12,8 @@ Painel portátil para Windows x64. Abra `AutoFarmTokenPirata.exe` e deixe o Fort
 - **Leitura de tela** controla o OCR em português e inglês e permite recortes opcionais.
 - **Atualizações** consulta as releases do GitHub e instala novas versões quando não há sessão em execução.
 
+Na página **Atividade**, **Testar fila do Fortnite** executa só o teste de entrada na fila. **Copiar atividade** copia o resultado para diagnóstico.
+
 O Fortnite precisa estar no primeiro plano. **F8** pausa ou retoma. **F9** encerra a sessão. A leitura de regiões e a composição visual do esquadrão têm configuração própria. Veja [as etapas opcionais de configuração](Configuracao.md).
 
 Para usar em outro computador, copie o executável. Se personalizou as detecções, leve a pasta de recortes também. Os ajustes são gravados ao lado do executável. O arquivo `webhook_discord.txt` contém a credencial do canal e deve ficar privado.

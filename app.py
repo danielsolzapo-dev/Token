@@ -336,13 +336,24 @@ class Painel:
 
     def atividade(self, painel):
         self.cabecalho(painel, "Atividade", "Acompanhe as detecções, ações e avisos do macro.")
-        self.log = tk.Text(painel, background=CAMPO, foreground=TEXTO, relief="flat",
+        acoes = ttk.Frame(painel)
+        acoes.pack(fill="x", pady=(0, 10))
+        ttk.Button(acoes, text="Testar fila do Fortnite",
+                   command=lambda: self.iniciar(False, teste_fila=True)).pack(side="left")
+        ttk.Button(acoes, text="Copiar atividade", command=self.copiar_atividade).pack(side="left", padx=8)
+        quadro = ttk.Frame(painel)
+        quadro.pack(fill="both", expand=True)
+        self.log = tk.Text(quadro, background=CAMPO, foreground=TEXTO, relief="flat",
                            padx=12, pady=10, wrap="word", state="disabled",
                            font=("Consolas", 10))
-        barra = ttk.Scrollbar(painel, orient="vertical", command=self.log.yview)
+        barra = ttk.Scrollbar(quadro, orient="vertical", command=self.log.yview)
         barra.pack(side="right", fill="y")
         self.log.configure(yscrollcommand=barra.set)
         self.log.pack(side="left", fill="both", expand=True)
+
+    def copiar_atividade(self):
+        self.janela.clipboard_clear()
+        self.janela.clipboard_append(self.log.get("1.0", "end-1c"))
 
     def pasta(self):
         valor = self.variaveis["botoes"].get().strip()
@@ -457,21 +468,25 @@ class Painel:
         if url or arq.is_file():
             escrever(arq, url)
 
-    def iniciar(self, previa=None):
+    def iniciar(self, previa=None, *, teste_fila=False):
         if self.download_em_andamento or (self.worker is not None and self.worker.is_alive()):
             return
         try:
             if previa is not None:
                 self.variaveis["previa"].set(previa)
             dados, args = self.opcoes()
-            botoes, recompensas, regioes = motor.carregar(self.pasta(), dados["regioes"],
+            args.teste_fila = teste_fila
+            botoes, recompensas, regioes = motor.carregar(self.pasta(), dados["regioes"] and not teste_fila,
                                                           exigir_pares=False, automatico=dados["ocr"])
-            squad = motor.carregar_squad(self.pasta()) if dados["squad"] else None
-            self.validar_capturas(dados, botoes, recompensas, regioes, squad)
-            self.persistir(dados)
-            url = motor.url_webhook() if dados["discord"] else ""
-            if dados["discord"] and not url:
-                raise ValueError("Informe a URL do webhook para enviar avisos.")
+            if teste_fila:
+                recompensas, regioes, squad, url = {}, {}, None, ""
+            else:
+                squad = motor.carregar_squad(self.pasta()) if dados["squad"] else None
+                self.validar_capturas(dados, botoes, recompensas, regioes, squad)
+                self.persistir(dados)
+                url = motor.url_webhook() if dados["discord"] else ""
+                if dados["discord"] and not url:
+                    raise ValueError("Informe a URL do webhook para enviar avisos.")
         except (OSError, ValueError) as erro:
             self.erro(str(erro))
             return

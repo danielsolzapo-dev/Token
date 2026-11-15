@@ -19,8 +19,11 @@ import cv2
 import numpy as np
 from PIL import Image, ImageGrab
 
+from fila import Fila
+
 F8, F9, ESC = 0x77, 0x78, 0x1B
 MOUSE_ESQUERDO_PRESSIONAR, MOUSE_ESQUERDO_SOLTAR = 0x0002, 0x0004
+MOUSE_MOVER_ABSOLUTO = 0x0001 | 0x4000 | 0x8000
 PASTA = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
 FUSOS = {
     "europa": "Europe/Paris",
@@ -91,7 +94,7 @@ class Windows:
             raise OSError("O ponto detectado ficou fora da janela do Fortnite.")
         if self.janela() != janela:
             raise OSError("O Fortnite perdeu o foco antes do clique.")
-        if not self.api.SetCursorPos(x, y):
+        if not self.mover_cursor(x, y):
             raise OSError("O Windows recusou o movimento do cursor.")
         time.sleep(0.12)
         cursor = wintypes.POINT()
@@ -111,9 +114,21 @@ class Windows:
         return True
 
     def botao_mouse(self, flag):
-        evento = Input(mouse=MouseInput(dwFlags=flag))
+        return self.enviar_mouse(MouseInput(dwFlags=flag))
+
+    def enviar_mouse(self, mouse):
+        evento = Input(mouse=mouse)
         return self.api.SendInput(1, ctypes.byref(evento), ctypes.sizeof(Input)) == 1
 
+    def mover_cursor(self, x, y):
+        # Os índices 76–79 descrevem toda a área virtual, inclusive monitores à esquerda.
+        esquerda, topo, largura, altura = (self.api.GetSystemMetrics(i) for i in (76, 77, 78, 79))
+        if largura > 0 and altura > 0 and esquerda <= x < esquerda + largura and topo <= y < topo + altura:
+            dx = int((x - esquerda + 0.5) * 65536 / largura)
+            dy = int((y - topo + 0.5) * 65536 / altura)
+            if self.enviar_mouse(MouseInput(dx=dx, dy=dy, dwFlags=MOUSE_MOVER_ABSOLUTO)):
+                return True
+        return bool(self.api.SetCursorPos(x, y))
     def pressionar(self, janela, teclas, duracao=0.06, giro=0):
         if self.janela() != janela:
             return False
@@ -348,7 +363,8 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
               *, parar=None, alternar=None, log=print, estado=lambda _: None, ocr=None):
     ativo = parar is not None or getattr(sys, "frozen", False) or not args.executar
     estado("Ativo" if ativo else "Pausado")
-    fila = getattr(args, "fila", True)
+    teste_fila = getattr(args, "teste_fila", False)
+    fila = teste_fila or getattr(args, "fila", True)
     cronometrar = getattr(args, "cronometrar", True)
     resgatar = getattr(args, "resgatar", True)
     anterior = {}
@@ -362,8 +378,8 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
     total = carregar_contador()
     iniciou_sessao = time.monotonic()
     fase_fila = None
-    clique_fila_em = None
-    tentativas_fila = 0
+    estado_fila = Fila()
+    teste_inicio = time.monotonic()
     modo_passo = None
     avisos = set()
     atraso_clique = {"jogar": 7, "lobby": 5, "resgatar": 3}
@@ -373,6 +389,8 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
         log("Prévia: detecção sem cliques e sem mensagens no Discord.")
     else:
         log("Execução: cliques habilitados.")
+        if teste_fila:
+            log("Teste de fila: volte ao lobby. O teste termina ao confirmar a entrada ou após 45 segundos.")
         if not fila:
             log("Fila automática desligada em Fila e saída.")
 
@@ -387,6 +405,7 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
             anterior = {}
             if ativo:
                 iniciou_sessao = agora
+                estado_fila.reiniciar()
             estado("Ativo" if ativo else "Pausado")
             log("Ativo." if ativo else "Pausado.")
         f8_anterior = f8
@@ -394,10 +413,15 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
             time.sleep(0.04)
             continue
         proxima_captura = agora + 0.75
+        if teste_fila and agora - teste_inicio >= 45:
+            log("Teste encerrado: o Fortnite não confirmou a fila em 45 segundos.")
+            break
         janela = windows.janela()
         if janela != tela_anterior:
             anterior = {}
             tela_anterior = janela
+            if teste_fila:
+                log("Fortnite em primeiro plano." if janela else "Fortnite perdeu o foco.")
         if janela is None:
             continue
 
@@ -411,7 +435,8 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
         if configurando is not None:
             modelos["passo_regiao"] = regioes[configurando][passo_regiao][0]
         atual = ocr.ler(tela, saindo=bool(partida.saida and fase_fila != "saindo"),
-                       confirmar="sair" in partida.saida, aguardando_fila=clique_fila_em is not None) if ocr else {}
+                       confirmar="sair" in partida.saida,
+                       aguardando_fila=estado_fila.clique_em is not None) if ocr else {}
         atual.update({nome: ponto for nome, recorte in modelos.items()
                       if (ponto := localizar(tela, recorte, args.limiar)) is not None})
         estaveis = {nome for nome, ponto in atual.items() if nome in anterior and
@@ -436,10 +461,15 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
         if windows.tecla(F9) or (parar and parar.is_set()):
             break
 
-        if clique_fila_em is not None and estaveis & {"fila_ativa", "partida", "onibus"}:
+        if estado_fila.atualizar(estaveis):
             log("Fila confirmada pela tela do Fortnite.")
-            clique_fila_em = None
-            tentativas_fila = 0
+            if teste_fila:
+                break
+        if estado_fila.desistiu(agora):
+            log("O botão Jogar continuou visível após três cliques.")
+            if teste_fila:
+                break
+            log("Pause e retome para tentar de novo.")
         if "jogar" in novos and args.executar:
             log(f"Botão Jogar detectado em {atual['jogar']}.")
 
@@ -467,7 +497,10 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
                 partida.notificados.add("suspensao")
                 executor.submit(enviar_discord, url, "Aviso de suspensão detectado na tela do Fortnite.", True, log=log)
             continue
-        if "tesouro" in atual or itens:
+        if teste_fila:
+            if "jogar" in estaveis:
+                acao = "jogar"
+        elif "tesouro" in atual or itens:
             if resgatar and "tesouro" in estaveis and "resgatar" in estaveis:
                 acao = "resgatar"
         elif configurando is not None:
@@ -538,7 +571,8 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
                 if not nome.startswith("item:"):
                     log(f"Detectado: {nome} em {atual[nome]}.")
             continue
-        if acao is None or agora < proxima_acao or (parar and parar.is_set()):
+        if (acao is None or agora < proxima_acao or (parar and parar.is_set())
+                or (acao == "jogar" and not estado_fila.pode_clicar(agora))):
             continue
         if acao in ("esc", "fechar_inventario"):
             ok = windows.pressionar(janela, (ESC,))
@@ -559,9 +593,8 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
         proxima_acao = time.monotonic() + atraso_clique.get(acao, 1.25)
         log(f"Ação: {acao}.")
         if acao == "jogar":
-            clique_fila_em = time.monotonic()
-            tentativas_fila += 1
-            log(f"Clique em Jogar enviado ({tentativas_fila}). Aguardando a tela confirmar a fila.")
+            estado_fila.registrar_clique(time.monotonic())
+            log(f"Clique em Jogar enviado ({estado_fila.tentativas}). Aguardando a tela confirmar a fila.")
         anterior = {}
         if acao in ("esc", "aba_saida", "sair", "confirmar_saida"):
             partida.saida.add(acao)
