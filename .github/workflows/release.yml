@@ -42,7 +42,7 @@ jobs:
           $tag = "v$version"
           $opcoes = @()
           if ($env:BUILD_REF -eq 'teste-fila') {
-            $tag = "$tag-teste.1"
+            $tag = "$tag-teste.2"
             $opcoes += '--prerelease'
           } elseif ($env:BUILD_REF -ne 'main' -and $env:BUILD_REF -ne $tag) {
             throw "A tag e a versão do app precisam corresponder."

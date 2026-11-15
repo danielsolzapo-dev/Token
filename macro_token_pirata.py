@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageGrab
 
-from fila import Fila
+from fila import DiarioFortnite, Fila
 
 F8, F9, ESC = 0x77, 0x78, 0x1B
 MOUSE_ESQUERDO_PRESSIONAR, MOUSE_ESQUERDO_SOLTAR = 0x0002, 0x0004
@@ -379,6 +379,7 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
     iniciou_sessao = time.monotonic()
     fase_fila = None
     estado_fila = Fila()
+    diario = DiarioFortnite()
     teste_inicio = time.monotonic()
     modo_passo = None
     avisos = set()
@@ -461,8 +462,11 @@ def monitorar(windows, botoes, recompensas, regioes, squad, args, url, executor,
         if windows.tecla(F9) or (parar and parar.is_set()):
             break
 
-        if estado_fila.atualizar(estaveis):
-            log("Fila confirmada pela tela do Fortnite.")
+        eventos = diario.ler()
+        # O log pode confirmar a fila mesmo se a tela ainda estiver trocando.
+        if estado_fila.atualizar(estaveis | eventos):
+            fonte = "o log do Fortnite" if eventos else "a tela do Fortnite"
+            log(f"Fila confirmada por {fonte}.")
             if teste_fila:
                 break
         if estado_fila.desistiu(agora):
