@@ -9,6 +9,9 @@ import cv2
 from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
 
 
+AMBIGUO = object()
+
+
 @dataclass(frozen=True)
 class Linha:
     texto: str
@@ -49,7 +52,7 @@ def combinar(linhas, *, vertical=False):
                             (esquerda, topo, direita - esquerda, base - topo))
 
 
-def identificar(linhas, largura, altura, tipo):
+def identificar(linhas, largura, altura, tipo, *, sinalizar_ambiguidade=False):
     if tipo == "jogar":
         return next((linha for linha in combinar(linhas) if normalizar(linha.texto) in
                      {"JOGAR NOVAMENTE", "PLAY AGAIN", "READY UP AGAIN"}), None)
@@ -60,13 +63,17 @@ def identificar(linhas, largura, altura, tipo):
         }
         return next((linha for linha in linhas if linha.centro[1] >= 0.50 * altura
                      and normalizar(linha.texto) in rotulos), None)
+    if tipo == "fila_cancelada":
+        rotulos = {"PAREAMENTO CANCELADO", "FILA CANCELADA", "MATCHMAKING CANCELED",
+                   "MATCHMAKING CANCELLED", "QUEUE CANCELED", "QUEUE CANCELLED"}
+        return next((linha for linha in combinar(linhas) if normalizar(linha.texto) in rotulos), None)
     central = [linha for linha in linhas if 0.20 * largura <= linha.centro[0] <= 0.80 * largura
                and 0.18 * altura <= linha.centro[1] <= 0.88 * altura]
     afirmativos = {"SIM", "CONFIRMAR", "YES", "CONFIRM"}
     saidas = {"VOLTAR AO LOBBY", "SAIR DA PARTIDA", "RETURN TO LOBBY", "LEAVE MATCH"}
     negativos = [linha for linha in central if normalizar(linha.texto) in {"NAO", "CANCELAR", "NO", "CANCEL"}]
     botoes = [(linha, normalizar(linha.texto)) for linha in combinar(central)]
-    candidatos = []
+    candidatos = {}
     for linha in combinar(list(combinar(central)), vertical=True):
         titulo = normalizar(linha.texto)
         menciona_saida = any(p in titulo for p in (
@@ -87,18 +94,36 @@ def identificar(linhas, largura, altura, tipo):
                 continue
             for negativo in negativos:
                 nx, ny = negativo.centro
+                if not 0.03 * altura <= ny - base_titulo <= 0.50 * altura:
+                    continue
                 alinhamento = abs(y - ny) / altura
                 desvio_centro = abs((x + nx) / 2 - centro_titulo) / largura
                 distancia = abs(nx - x) / largura
                 lado_a_lado = alinhamento <= 0.045 and 0.05 <= distancia <= 0.48
-                empilhados = 0.05 <= (ny - y) / altura <= 0.18 and distancia <= 0.06
+                empilhados = 0.05 <= alinhamento <= 0.18 and distancia <= 0.06
                 if desvio_centro <= 0.12 and (lado_a_lado or empilhados):
-                    candidatos.append(((rotulo not in afirmativos, alinhamento + desvio_centro), botao))
-    return min(candidatos, key=lambda item: item[0])[1] if candidatos else None
+                    nota = (rotulo not in afirmativos, alinhamento + desvio_centro)
+                    anterior = candidatos.get(botao.caixa)
+                    if anterior is None or nota < anterior[0]:
+                        candidatos[botao.caixa] = nota, botao, linha, negativo
+    if not candidatos:
+        return None
+    melhores = sorted(candidatos.values(), key=lambda item: item[0])
+    (classe, nota), botao, titulo, negativo = melhores[0]
+    for (outra_classe, outra_nota), _, outro_titulo, outro_negativo in melhores[1:]:
+        grupos_distintos = (
+            (abs(titulo.centro[0] - outro_titulo.centro[0]) >= 0.15 * largura
+             or abs(titulo.centro[1] - outro_titulo.centro[1]) >= 0.15 * altura)
+            and negativo.caixa != outro_negativo.caixa
+        )
+        if (classe == outra_classe or grupos_distintos) and outra_nota <= max(0.08, nota + 0.05):
+            return AMBIGUO if sinalizar_ambiguidade else None
+    return botao
 
 
 class Reconhecedor:
     def __init__(self):
+        self.dialogo_ambiguo = False
         modelos = Path(__file__).resolve().with_name("modelos")
         det = modelos / "PP-OCRv6_det_small.onnx"
         rec = modelos / "latin_PP-OCRv5_rec_mobile.onnx"
@@ -117,8 +142,13 @@ class Reconhecedor:
         altura, largura = quadro.shape[:2]
         resultado = self.ocr(quadro, use_cls=False)
         if resultado.boxes is None:
+            if tipo == "confirmar_sair":
+                self.dialogo_ambiguo = False
             return None
         linhas = [Linha(texto, cv2.boundingRect(caixa.astype("float32")))
                   for caixa, texto, score in zip(resultado.boxes, resultado.txts, resultado.scores)
                   if score >= 0.78]
-        return identificar(linhas, largura, altura, tipo)
+        linha = identificar(linhas, largura, altura, tipo, sinalizar_ambiguidade=True)
+        if tipo == "confirmar_sair":
+            self.dialogo_ambiguo = linha is AMBIGUO
+        return None if linha is AMBIGUO else linha

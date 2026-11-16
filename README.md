@@ -10,7 +10,7 @@ Aplicativo portátil para Windows x64, baseado na lógica reconstruída do AutoF
 
 O app procura **Jogar Novamente**, **Continuar** e os botões do lobby. A detecção usa imagens de referência em múltiplas escalas. A alternativa por cor para **Jogar Novamente** também exige o rótulo do botão. A leitura de texto em português ou inglês procura sinais de fila e o diálogo de confirmação de saída.
 
-O contador só avança após reconhecer a fila ou a nova partida. Depois de um clique para entrar na fila, o cronômetro espera uma transição de HUD ou um aviso novo de ônibus. O movimento anti-AFK depende da leitura do HUD. O painel verifica o foco e a posição da janela antes de enviar comandos. Cliques interrompidos antes do envio conservam as tentativas disponíveis.
+O contador só avança após reconhecer a fila ou a nova partida. Se uma fila confirmada demorar, o painel avisa e espera pelo início do jogo ou por uma mensagem de cancelamento. Depois de um clique para entrar na fila, o cronômetro espera uma transição de HUD ou um aviso novo de ônibus. O movimento anti-AFK depende da leitura do HUD. O painel verifica o foco e a posição da janela antes de enviar comandos. Cliques interrompidos antes do envio conservam as tentativas disponíveis. Se a confirmação de saída tiver mais de uma opção plausível, o painel avisa e aguarda.
 
 Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção visual foi verificada com imagens de teste e pode variar com a versão do jogo e a escala do HUD.
 

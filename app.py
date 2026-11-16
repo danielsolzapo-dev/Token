@@ -59,6 +59,7 @@ def salvar_config(config):
 
 def monitorar(windows, fluxo, eventos, parar):
     estado_anterior = acao_anterior = None
+    dialogo_ambiguo_anterior = False
     try:
         detector = fluxo.detector
         if faltando := TEMPLATES.keys() - detector.templates.keys():
@@ -76,6 +77,9 @@ def monitorar(windows, fluxo, eventos, parar):
                 contagem = fluxo.partidas
                 acao = fluxo.passo(quadro, time.monotonic(), partida=partida, cursor=cursor,
                                    no_onibus=onibus, hud_visivel=hud_visivel)
+                if detector.dialogo_ambiguo and not dialogo_ambiguo_anterior:
+                    eventos.put(("acao", "Confirmação de saída ambígua. Confira o jogo."))
+                dialogo_ambiguo_anterior = detector.dialogo_ambiguo
                 estado = "Em partida" if partida and fluxo.inicio_partida is not None else "Procurando botões"
                 executada = acao is not None and windows.executar(janela, acao, parar)
                 if acao and acao.tipo == "clicar":
@@ -94,6 +98,8 @@ def monitorar(windows, fluxo, eventos, parar):
                             "lobby_nao_encontrado": "Lobby não encontrado. Confira se o jogo pede confirmação.",
                             "aguardando_fila": "Aguardando confirmação da fila ou do início da partida",
                             "fila_confirmada": "Fila confirmada. Aguardando o início da partida.",
+                            "fila_sem_partida": "Fila confirmada sem início de partida. Aguardando o jogo ou o cancelamento.",
+                            "fila_cancelada": "Cancelamento de fila reconhecido.",
                             "partida_confirmada": "Partida reconhecida. Cronômetro iniciado.",
                             "partida_nao_confirmada": "Nenhuma partida reconhecida dentro do prazo",
                             "tela_nao_reconhecida": "Tela sem sinais conhecidos. Verifique o jogo ou use Testar imagem.",
@@ -248,9 +254,11 @@ class Painel:
         try:
             quadro = detectar_arquivo(caminho)
             detector = Detector(config=self.ler_opcoes())
-            alvo = detector.detectar(quadro) or detector.procurar(
-                quadro, ("lobby_jogar", "lobby_pronto", "voltar_lobby", "resgatar"),
-            ) or detector.ler_contexto(quadro, "confirmar_sair")
+            alvo = detector.ler_contexto(quadro, "confirmar_sair")
+            if alvo is None and not detector.dialogo_ambiguo:
+                alvo = detector.detectar(quadro) or detector.procurar(
+                    quadro, ("lobby_jogar", "lobby_pronto", "voltar_lobby", "resgatar"),
+                )
         except (OSError, ValueError, cv2.error):
             self.atividade.set("Não foi possível testar a imagem. Confira o arquivo e os ajustes.")
             return
@@ -258,6 +266,8 @@ class Painel:
             x, y, w, h = alvo.caixa
             cv2.rectangle(quadro, (x, y), (x + w, y + h), (85, 224, 183), max(2, quadro.shape[0] // 275))
             texto = f"{ROTULOS[alvo.nome]} · {alvo.score:.0%} · {alvo.metodo}"
+        elif detector.dialogo_ambiguo:
+            texto = "Mais de um botão de confirmação plausível nesta imagem."
         else:
             texto = "Nenhum botão reconhecido nesta imagem."
         self.mostrar_teste(quadro, texto)
@@ -355,6 +365,34 @@ def verificar_build():
     alvo = detector.detectar(cv2.cvtColor(np.asarray(botao), cv2.COLOR_RGB2BGR))
     if alvo is None or alvo.metodo != "cor" or not 650 < alvo.centro[0] < 790:
         raise RuntimeError("Falha na leitura por cor e texto de Jogar Novamente.")
+
+    botoes = Image.new("RGB", (960, 540), "#17263a")
+    desenho = ImageDraw.Draw(botoes)
+    for (x0, x1), palavra in (((600, 770), "JOGAR"), ((778, 948), "NOVAMENTE")):
+        desenho.rectangle((x0, 220, x1, 269), fill="#ffff00")
+        desenho.text(((x0 + x1) / 2, 245), palavra, font=fonte_botao, anchor="mm", fill="#101010")
+    if detector.detectar(cv2.cvtColor(np.asarray(botoes), cv2.COLOR_RGB2BGR)) is not None:
+        raise RuntimeError("Dois botões amarelos foram confundidos com Jogar Novamente.")
+
+    empilhado = Image.new("RGB", (960, 540), "#17263a")
+    desenho = ImageDraw.Draw(empilhado)
+    desenho.text((480, 178), "RETURN TO LOBBY?", font=fonte, anchor="mm")
+    desenho.text((480, 275), "CANCEL", font=fonte, anchor="mm")
+    desenho.text((480, 335), "CONFIRM", font=fonte, anchor="mm")
+    confirmacao = detector.ler_contexto(cv2.cvtColor(np.asarray(empilhado), cv2.COLOR_RGB2BGR),
+                                       "confirmar_sair")
+    if confirmacao is None or not 310 < confirmacao.centro[1] < 350:
+        raise RuntimeError("Falha na leitura do diálogo com Cancelar acima de Confirmar.")
+
+    duplo = Image.new("RGB", (960, 540), "#17263a")
+    desenho = ImageDraw.Draw(duplo)
+    for centro, titulo in ((310, "LEAVE MATCH?"), (635, "RETURN TO LOBBY?")):
+        desenho.text((centro, 180), titulo, font=fonte, anchor="mm")
+        desenho.text((centro - 67, 313), "CONFIRM", font=fonte_botao, anchor="mm")
+        desenho.text((centro + 67, 313), "CANCEL", font=fonte_botao, anchor="mm")
+    confirmacao = detector.ler_contexto(cv2.cvtColor(np.asarray(duplo), cv2.COLOR_RGB2BGR), "confirmar_sair")
+    if confirmacao is not None or not detector.dialogo_ambiguo:
+        raise RuntimeError("O OCR não bloqueou uma confirmação ambígua.")
     windows = Windows()
     janela = tk.Tk()
     janela.withdraw()

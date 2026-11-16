@@ -87,6 +87,7 @@ class Detector:
         self.config = config
         self.leitor = leitor
         self._ultimo_texto = None
+        self.dialogo_ambiguo = False
         pasta = Path(pasta) if pasta else Path(__file__).with_name("templates")
         self.templates = {}
         self.ultima_escala = {}
@@ -206,9 +207,8 @@ class Detector:
         recorte = imagem[y0:int(altura * 0.75), x0:]
         hsv = cv2.cvtColor(recorte, cv2.COLOR_BGR2HSV)
         mascara = cv2.inRange(hsv, (22, 150, 190), (38, 255, 255))
-        k = max(3, int(altura * 0.025))
-        fechada = cv2.morphologyEx(mascara, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
-        contornos, _ = cv2.findContours(fechada, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # A borda externa engloba os furos das letras sem fundir controles vizinhos.
+        contornos, _ = cv2.findContours(mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cinza = cv2.cvtColor(recorte, cv2.COLOR_BGR2GRAY)
         melhor, maior_area = None, 0
         for contorno in contornos:
@@ -220,7 +220,7 @@ class Detector:
             janela = np.s_[y:y + h, x:x + w]
             amarelo = cv2.countNonZero(mascara[janela]) / area
             escuro = float((cinza[janela] < 90).mean())
-            if (area > maior_area and cv2.countNonZero(fechada[janela]) / area >= 0.85
+            if (area > maior_area and cv2.contourArea(contorno) / area >= 0.85
                     and amarelo >= 0.5 and 0.03 <= escuro <= 0.45):
                 caixa = tuple(round(v / fator) for v in (x + x0, y + y0, w, h))
                 melhor, maior_area = Alvo("jogar", amarelo, caixa, None, "cor"), area
@@ -272,6 +272,8 @@ class Detector:
             if imagem is quadro and contexto == tipo:
                 return alvo
         linha = self.leitor.ler(quadro, tipo)
+        if tipo == "confirmar_sair":
+            self.dialogo_ambiguo = getattr(self.leitor, "dialogo_ambiguo", False)
         alvo = Alvo(tipo, 1.0, linha.caixa, None, "texto") if linha else None
         self._ultimo_texto = quadro, tipo, alvo
         return alvo
@@ -325,6 +327,7 @@ class Fluxo:
         self._prazo_menu = None
         self._prazo_fila = None
         self._fila_contada = False
+        self._fila_expirada = False
         self._quadros_partida = 0
         self._quadros_sem_hud = 0
         self._transicao_hud = False
@@ -332,6 +335,7 @@ class Fluxo:
         self._onibus_no_clique = False
         self._botoes_fila_clicados = set()
         self._leituras_fila = 0
+        self._leituras_cancelamento = 0
         self._proximo_texto_fila = 0.0
         self._sem_leitura_desde = None
         self._aviso_leitura = False
@@ -348,6 +352,7 @@ class Fluxo:
         self.confirmacao.limpar()
         self._quadros_sem_alvo = self._quadros_partida = self._leituras_fila = 0
         self._quadros_sem_hud = 0
+        self._leituras_cancelamento = 0
         self._sem_leitura_desde = None
         self._aviso_leitura = False
 
@@ -400,6 +405,9 @@ class Fluxo:
         nome = self._pendente
         abriu_modal = nome == "voltar_lobby" and self.detector.ler_contexto(quadro, "confirmar_sair")
         alvo = None if abriu_modal else self._alvo(quadro, nome)
+        if nome in ("voltar_lobby", "confirmar_sair") and self.detector.dialogo_ambiguo:
+            self._quadros_sem_alvo = 0
+            return None
         if alvo and self._tentativas < 3:
             return self._clicar_e_verificar(alvo, quadro)
         if not alvo:
@@ -419,6 +427,8 @@ class Fluxo:
             self._prazo_lobby = None
             self._prazo_fila = agora + self.config.timeout_lobby
             self._fila_contada = False
+            self._fila_expirada = False
+            self._leituras_cancelamento = 0
             self._quadros_partida = self._leituras_fila = 0
             self._proximo_texto_fila = agora
             return Acao("aguardando_fila")
@@ -428,23 +438,38 @@ class Fluxo:
             self._prazo_lobby = agora + self.config.timeout_lobby
         return Acao("clique_confirmado")
 
+    def _encerrar_espera_fila(self):
+        self._prazo_fila = None
+        self._fila_contada = self._fila_expirada = False
+        self._botoes_fila_clicados.clear()
+        self.confirmacao.limpar()
+
     def _confirmar_fila(self, quadro, agora, partida, hud_visivel, no_onibus):
-        if agora >= self._prazo_fila:
-            self._prazo_fila = None
-            self._botoes_fila_clicados.clear()
-            self.confirmacao.limpar()
-            return Acao("partida_nao_confirmada")
+        if agora >= self._prazo_fila and not self._fila_expirada:
+            if not self._fila_contada:
+                self._encerrar_espera_fila()
+                return Acao("partida_nao_confirmada")
+            self._fila_expirada = True
+            return Acao("fila_sem_partida")
         self._observar_transicao(hud_visivel, no_onibus)
         jogo_novo = partida and (self._transicao_hud or (no_onibus and not self._onibus_no_clique))
         self._quadros_partida = self._quadros_partida + 1 if jogo_novo else 0
         if self._quadros_partida >= 2:
-            self._prazo_fila = None
-            self._botoes_fila_clicados.clear()
             self._iniciar_partida(agora)
             if not self._fila_contada:
                 self.partidas += 1
+            self._encerrar_espera_fila()
             return Acao("partida_confirmada")
-        if not self._fila_contada and not jogo_novo and agora >= self._proximo_texto_fila:
+        if self._fila_contada:
+            if not jogo_novo and agora >= self._proximo_texto_fila:
+                self._proximo_texto_fila = agora + 1
+                cancelada = self.detector.ler_contexto(quadro, "fila_cancelada")
+                self._leituras_cancelamento = self._leituras_cancelamento + 1 if cancelada else 0
+                if self._leituras_cancelamento >= 2:
+                    self._encerrar_espera_fila()
+                    return Acao("fila_cancelada")
+            return None
+        if not jogo_novo and agora >= self._proximo_texto_fila:
             self._proximo_texto_fila = agora + 1
             fila = self.detector.ler_contexto(quadro, "fila")
             self._leituras_fila = self._leituras_fila + 1 if fila else 0
@@ -453,7 +478,7 @@ class Fluxo:
                 self._fila_contada = True
                 self.confirmacao.limpar()
                 return Acao("fila_confirmada")
-        if not (self._fila_contada or self._leituras_fila or partida):
+        if not (self._leituras_fila or partida):
             botoes = tuple(nome for nome in BOTOES_LOBBY if nome not in self._botoes_fila_clicados)
             alvo = self._procurar(quadro, *botoes)
             if alvo:
@@ -493,8 +518,11 @@ class Fluxo:
             self.confirmacao.limpar()
             return None
 
-        if self._prazo_lobby is not None and agora < self._prazo_lobby:
+        if self.detector.dialogo_ambiguo or (self._prazo_lobby is not None and agora < self._prazo_lobby):
             alvo = self.detector.ler_contexto(quadro, "confirmar_sair")
+            if self.detector.dialogo_ambiguo:
+                self.confirmacao.limpar()
+                return None
             if alvo:
                 return self._clicar_e_verificar(alvo, quadro)
         alvo = self.detector.detectar(quadro)

@@ -15,6 +15,7 @@ from windows_game import Janela, Windows
 class TelaSimulada:
     config = Config(minutos_partida=0.1, timeout_lobby=8, anti_afk=False)
     nome = None
+    dialogo_ambiguo = False
 
     def procurar(self, _, nomes, limiar=None):
         if self.nome in nomes:
@@ -85,6 +86,32 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.fluxo.partidas, 1)
         self.assertEqual(self.fluxo.inicio_partida, 4.3)
 
+    def confirmar_fila_e_expirar(self):
+        self.iniciar_clique("lobby_jogar")
+        self.passo(2)
+        self.passo(2.2)
+        self.passo(2.4, "fila")
+        self.assertEqual(self.passo(3.5, "fila").tipo, "fila_confirmada")
+        self.assertIsNone(self.passo(5, "lobby_jogar"))
+        self.assertEqual(self.passo(10.3, "lobby_jogar").tipo, "fila_sem_partida")
+        self.assertIsNone(self.passo(10.6, "lobby_jogar"))
+        self.assertIsNone(self.passo(11, "lobby_jogar"))
+        self.assertEqual(self.fluxo.partidas, 1)
+
+    def test_fila_confirmada_ainda_aceita_partida_apos_timeout(self):
+        self.confirmar_fila_e_expirar()
+        self.assertIsNone(self.passo(12, partida=True))
+        self.assertEqual(self.passo(12.2, partida=True).tipo, "partida_confirmada")
+        self.assertEqual(self.fluxo.partidas, 1)
+
+    def test_nova_fila_exige_cancelamento_explicito_apos_timeout(self):
+        self.confirmar_fila_e_expirar()
+        self.assertIsNone(self.passo(12.2, "fila_cancelada"))
+        self.assertEqual(self.passo(13.4, "fila_cancelada").tipo, "fila_cancelada")
+        self.assertIsNone(self.passo(14, "lobby_jogar"))
+        self.assertEqual(self.passo(14.2, "lobby_jogar").alvo.nome, "lobby_jogar")
+        self.assertEqual(self.fluxo.partidas, 1)
+
     def test_hud_confirma_sem_ocr_de_fila(self):
         self.iniciar_clique("jogar")
         self.passo(2)
@@ -142,6 +169,17 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(9.8, "confirmar_sair").alvo.nome, "confirmar_sair")
         self.assertEqual(self.fluxo.partidas, 0)
 
+    def test_ambiguidade_impede_repetir_clique_no_menu_de_fundo(self):
+        self.passo(0, partida=True)
+        self.passo(6, partida=True)
+        self.passo(7.1, "voltar_lobby")
+        self.assertEqual(self.passo(7.4, "voltar_lobby").tipo, "clicar")
+        self.detector.dialogo_ambiguo = True
+        self.assertIsNone(self.passo(9, "voltar_lobby"))
+        self.assertIsNone(self.passo(11, "voltar_lobby"))
+        self.detector.dialogo_ambiguo = False
+        self.assertEqual(self.passo(13, "voltar_lobby").tentativa, 1)
+
     def test_tela_desconhecida_gera_aviso_e_busca_continua(self):
         self.assertIsNone(self.passo(0))
         self.assertEqual(self.passo(8).tipo, "tela_nao_reconhecida")
@@ -184,6 +222,30 @@ class DetectorTest(unittest.TestCase):
         linhas = [linha1, linha2, fundo, confirmar, cancelar]
         self.assertIs(identificar(linhas, 960, 540, "confirmar_sair"), confirmar)
         self.assertIsNone(identificar([linha1, linha2, fundo, cancelar], 960, 540, "confirmar_sair"))
+
+    def test_dois_dialogos_plausiveis_nao_tem_alvo(self):
+        linhas = [
+            Linha("LEAVE MATCH?", (220, 174, 165, 24)),
+            Linha("CONFIRM", (223, 302, 65, 24)), Linha("CANCEL", (318, 302, 65, 24)),
+            Linha("RETURN TO LOBBY?", (514, 174, 224, 24)),
+            Linha("CONFIRM", (536, 302, 65, 24)), Linha("CANCEL", (654, 302, 65, 24)),
+        ]
+        self.assertIsNone(identificar(linhas, 960, 540, "confirmar_sair"))
+        linhas[-2] = Linha("RETURN TO LOBBY", (500, 302, 137, 24))
+        self.assertIsNone(identificar(linhas, 960, 540, "confirmar_sair"))
+
+    def test_modal_empilhado_nos_dois_ordenamentos(self):
+        titulo = Linha("RETURN TO LOBBY?", (380, 170, 200, 25))
+        for y_sim, y_nao in ((260, 320), (320, 260)):
+            sim = Linha("CONFIRM", (430, y_sim, 100, 24))
+            nao = Linha("CANCEL", (435, y_nao, 90, 24))
+            self.assertEqual(identificar([titulo, sim, nao], 960, 540, "confirmar_sair"), sim)
+
+    def test_cancelar_pareamento_nao_e_confirmacao_de_cancelamento(self):
+        botao = Linha("CANCELAR PAREAMENTO", (400, 430, 180, 20))
+        aviso = Linha("PAREAMENTO CANCELADO", (390, 430, 190, 20))
+        self.assertIsNone(identificar([botao], 960, 540, "fila_cancelada"))
+        self.assertIs(identificar([aviso], 960, 540, "fila_cancelada"), aviso)
 
     def test_reune_palavras_proximas_sem_unir_controles_distantes(self):
         jogar = Linha("JOGAR", (15, 10, 60, 23))
