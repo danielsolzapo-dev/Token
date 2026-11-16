@@ -1,31 +1,26 @@
-# Auto Farm do Token Pirata
+# Auto Farm para Fortnite
 
-[Baixar o executável para Windows x64](https://github.com/danielsolzapo-dev/Token/releases/latest/download/AutoFarmTokenPirata.exe)
+Aplicativo portátil para Windows x64, baseado na lógica reconstruída do AutoFarmFN v59. [Release de referência](https://github.com/guifqz/AutoFarmFN/releases/tag/v59)
 
-Painel portátil para Windows x64. Abra `AutoFarmTokenPirata.exe` e deixe o Fortnite em primeiro plano. Use **Testar leitura** para conferir as detecções em **Atividade**. Use **Iniciar cliques** para agir no jogo.
+[Baixar AutoFarmTokenPirata.exe para Windows](https://github.com/danielsolzapo-dev/Token/releases/latest/download/AutoFarmTokenPirata.exe)
 
-- **Fila e saída** controla o clique no lobby, o cronômetro por partida e a pausa programada.
-- **Movimento** oferece controles para o movimento aleatório, o inventário e o ônibus.
-- **Tesouro e Discord** configura o resgate, o webhook e as imagens de recompensa.
-- **Esquadrão** configura a conferência do modo e o critério de saída pela composição da equipe.
-- **Região de dia** importa as sequências de seleção e verificação do pareamento.
-- **Leitura de tela** controla o OCR em português e inglês e permite recortes opcionais.
-- **Atualizações** consulta as releases do GitHub e instala novas versões quando não há sessão em execução.
+1. Abra o executável e ajuste as opções antes de iniciar.
+2. Clique em **Iniciar** e deixe o Fortnite em primeiro plano, em modo janela ou tela cheia em janela.
+3. Use **F6** para iniciar ou pausar. **Testar imagem** abre um PNG, JPG ou BMP e marca o botão detectado.
 
-O Fortnite precisa estar no primeiro plano. **F8** pausa ou retoma. **F9** encerra a sessão. A leitura de regiões e a composição visual do esquadrão têm configuração própria. Veja [as etapas opcionais de configuração](Configuracao.md).
+O app procura **Jogar Novamente**, **Continuar** e os botões do lobby. A detecção usa imagens de referência em múltiplas escalas, com uma alternativa por cor para **Jogar Novamente**. Se a saída por tempo estiver ativa, o cronômetro começa após a leitura do HUD ou o reinício da fila. O movimento anti-AFK também depende da leitura do HUD. O painel suspende o envio de comandos quando o jogo perde o foco.
 
-Para usar em outro computador, copie o executável. Se personalizou as detecções, leve a pasta de recortes também. Os ajustes são gravados ao lado do executável. O arquivo `webhook_discord.txt` contém a credencial do canal e deve ficar privado.
+Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção visual foi verificada com imagens de teste e pode variar com a versão do jogo e a escala do HUD.
 
 ## Desenvolvimento
 
-No Windows com Python 3.14, execute `py -3.14 -m pip install -r requirements.txt`, `py -3.14 preparar_ocr.py` e `py -3.14 app.py`.
-
-Para gerar o executável, use:
+Use o Python 3.14 no Windows.
 
 ```powershell
-py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-data tzdata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" app.py
+py -3.14 -m pip install -r requirements.txt
+py -3.14 app.py
+py -3.14 app.py --verificar-build
+py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --add-data "templates;templates" app.py
 ```
 
-O workflow compila e testa o executável no Windows. A publicação usa a versão em `versao.py`.
-
-A leitura de tela usa [RapidOCR](https://github.com/RapidAI/RapidOCR) e os modelos PP-OCR. O executável inclui os avisos de licença do pacote RapidOCR.
+O executável é gerado em `dist/`. O GitHub Actions roda a verificação do pacote antes de publicá-lo.
