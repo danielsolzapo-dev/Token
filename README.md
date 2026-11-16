@@ -10,6 +10,7 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 2. Deixe o Fortnite em primeiro plano, em modo janela ou tela cheia em janela, e clique em **Iniciar**. **F6** inicia ou pausa.
 3. Use **Testar imagem** para inspecionar um PNG, JPG ou BMP. O diagnóstico marca a caixa e o centro detectados e exibe método e score; essa função nunca envia teclado ou mouse.
 4. Opcionalmente, escolha **Configurar baú** para carregar um recorte de imagem de um baú visível (20–512 px por lado), ative **Avisar ao detectar baú visível** e inicie o monitoramento.
+5. **Notificações do Windows** avisa sobre partida reconhecida, retorno ao lobby, perda/restauração de foco e erros. Depois de pausar ou encerrar, use **Exportar resumo da sessão** para salvar um JSON.
 
 O app procura **Jogar Novamente**, **Continuar** e os botões do lobby. A detecção usa imagens de referência em múltiplas escalas; a alternativa amarelo+OCR para **Jogar Novamente** só aceita o rótulo dentro do controle. A leitura em português ou inglês identifica fila e diálogo de saída, e não confirma quando há mais de um diálogo plausível.
 
@@ -23,7 +24,7 @@ Ao abrir, o app consulta os releases do GitHub em segundo plano. Se houver vers�
 
 ## Diagnóstico
 
-O monitoramento grava estados, bloqueios do anti-AFK, ações solicitadas/concluídas/não concluídas (com motivo) e erros em `%LOCALAPPDATA%\AutoFarmToken\autofarm.log`. O arquivo é rotativo (1 MB, mantendo até três cópias). Clique em **Abrir log** para acessá-lo e anexe o arquivo ao relatar uma falha. O log não contém capturas de tela nem texto bruto reconhecido por OCR; ele só é criado quando o monitoramento é iniciado.
+O monitoramento grava estados, bloqueios do anti-AFK, ações solicitadas/concluídas/não concluídas (com motivo) e erros em `%LOCALAPPDATA%\AutoFarmToken\autofarm.log`. O arquivo é rotativo (1 MB, mantendo até três cópias). Clique em **Abrir log** para acessá-lo e anexe o arquivo ao relatar uma falha. O log não contém capturas de tela nem texto bruto reconhecido por OCR; ele só é criado quando o monitoramento é iniciado. O resumo exportado contém versão, horários, duração, filas/partidas reconhecidas, alertas de baú, falhas de entrada, interrupções de foco e erros, mas não inclui capturas nem OCR.
 
 Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção depende da resolução, escala e idioma da interface do jogo e pode precisar de ajustes após atualizações do Fortnite. Confirme se automação de entradas é permitida pelas regras do jogo; não use o aplicativo se isso violar as regras ou políticas aplicáveis.
 
@@ -41,7 +42,7 @@ Inicie, teste e compile:
 ```powershell
 py -3.14 app.py
 py -3.14 -m unittest discover -s tests -v
-py -3.14 -m py_compile app.py atualizador.py logica_autofarm.py texto_tela.py windows_game.py
+py -3.14 -m py_compile app.py atualizador.py logica_autofarm.py notificacoes.py texto_tela.py windows_game.py
 py -3.14 app.py --verificar-build
 py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" app.py
 ```

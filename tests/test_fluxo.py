@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 from queue import SimpleQueue
@@ -12,10 +13,11 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import Painel, configurar_logger, monitorar
+from app import Painel, carregar_config, configurar_logger, monitorar, salvar_config
 from logica_autofarm import (
     Acao, Alvo, Config, Detector, DetectorBau, Fluxo, ObservadorBau, TEMPLATES,
 )
+from notificacoes import NIM_ADD, NIM_DELETE, NIM_MODIFY, NotificadorWindows
 from texto_tela import Linha, Reconhecedor, identificar
 from windows_game import Janela, Windows
 
@@ -531,6 +533,48 @@ class PainelTest(unittest.TestCase):
         self.assertTrue(np.array_equal(salva, referencia))
         self.assertIn("Referência salva", mensagens[0])
 
+    def test_exporta_resumo_json_escolhido_pelo_usuario(self):
+        painel = object.__new__(Painel)
+        painel.janela = None
+        painel.resumo_sessao = {"partidas_iniciadas": 2, "erros": []}
+        mensagens = []
+        painel.atividade = SimpleNamespace(set=mensagens.append)
+        with TemporaryDirectory() as diretorio:
+            caminho = Path(diretorio) / "resumo.json"
+            with patch("app.filedialog.asksaveasfilename", return_value=str(caminho)):
+                painel.exportar_resumo()
+            dados = json.loads(caminho.read_text(encoding="utf-8"))
+        self.assertEqual(dados["partidas_iniciadas"], 2)
+        self.assertIn("Resumo exportado", mensagens[0])
+
+    def test_notificacoes_delegam_para_a_api_do_windows(self):
+        chamadas = []
+
+        class FakeNotifier:
+            def __init__(self, hwnd):
+                chamadas.append(("criar", hwnd))
+
+            def notificar(self, titulo, mensagem):
+                chamadas.append((titulo, mensagem))
+
+        painel = object.__new__(Painel)
+        painel.fechando = False
+        painel.opcoes = {"notificacoes": SimpleNamespace(get=lambda: True)}
+        painel.notificador = None
+        painel.janela = SimpleNamespace(winfo_id=lambda: 42)
+        with patch("app.NotificadorWindows", FakeNotifier):
+            painel.notificar_windows("Partida reconhecida", "Monitor ativo.")
+        self.assertEqual(chamadas, [
+            ("criar", 42), ("Partida reconhecida", "Monitor ativo."),
+        ])
+
+    def test_config_persiste_preferencia_de_notificacoes(self):
+        config = replace(Config(), notificacoes=False)
+        with TemporaryDirectory() as diretorio:
+            with patch("app.CONFIG", Path(diretorio) / "ajustes.json"):
+                salvar_config(config)
+                self.assertFalse(carregar_config().notificacoes)
+
     def test_testar_imagem_exibe_metadados_sem_enviar_entrada(self):
         chamadas = []
         painel = object.__new__(Painel)
@@ -648,6 +692,72 @@ class MonitorTest(unittest.TestCase):
         self.assertIn("motivo=entrada_recusada", texto)
         self.assertIn("acao_com_erro", texto)
         self.assertIn(("erro", "falha simulada"), eventos_lidos)
+        resumo = next(valor for evento, valor in eventos_lidos if evento == "relatorio")
+        self.assertEqual(len(resumo["erros"]), 1)
+        self.assertEqual(resumo["falhas_de_entrada"], 4)
+
+    def test_resumo_e_notificacoes_registram_inicio_e_retorno_ao_lobby(self):
+        quadro = np.zeros((540, 960, 3), dtype=np.uint8)
+        detector = SimpleNamespace(
+            templates=dict.fromkeys(TEMPLATES), dialogo_ambiguo=False,
+            em_partida=lambda _: True, procurar=lambda *_args, **_kwargs: None,
+        )
+
+        class FluxoSimulado:
+            def __init__(self):
+                self.config = Config(anti_afk=False, notificacoes=True)
+                self.detector = detector
+                self.inicio_partida = None
+                self.partidas = 0
+                self.ciclo = 0
+
+            def passo(self, *_args, **_kwargs):
+                self.ciclo += 1
+                if self.ciclo == 2:
+                    self.inicio_partida = 1.0
+                    return Acao("partida_confirmada")
+                if self.ciclo == 3:
+                    return Acao("esc")
+                if self.ciclo == 4:
+                    self.inicio_partida = None
+                return None
+
+            def pausar(self):
+                pass
+
+        fluxo = FluxoSimulado()
+        parar = Event()
+        eventos = SimpleQueue()
+        ciclos = [0]
+
+        def aguardar(_):
+            ciclos[0] += 1
+            if ciclos[0] == 4:
+                parar.set()
+
+        windows = SimpleNamespace(
+            fortnite_em_foco=lambda: 42, capturar=lambda _: quadro.copy(),
+            disponivel=lambda *_: True, cursor_visivel=lambda: False,
+            executar=lambda *_: True, aguardar=aguardar,
+        )
+        with TemporaryDirectory() as diretorio:
+            logger = configurar_logger(Path(diretorio) / "autofarm.log")
+            with patch("app.configurar_logger", return_value=logger), \
+                    patch("app.time", SimpleNamespace(monotonic=iter(range(20)).__next__)):
+                monitorar(windows, fluxo, eventos, parar)
+            for handler in logger.handlers:
+                logger.removeHandler(handler)
+                handler.close()
+        eventos_lidos = []
+        while not eventos.empty():
+            eventos_lidos.append(eventos.get())
+        resumo = next(valor for evento, valor in eventos_lidos if evento == "relatorio")
+        notificacoes = [valor[0] for evento, valor in eventos_lidos if evento == "notificacao"]
+        self.assertEqual(resumo["partidas_iniciadas"], 1)
+        self.assertEqual(resumo["retornos_ao_lobby"], 1)
+        self.assertIn("Partida reconhecida", notificacoes)
+        self.assertIn("Retorno ao lobby", notificacoes)
+
 
     def test_monitor_avisa_bau_estavel_sem_enviar_entrada(self):
         quadro = np.zeros((540, 960, 3), dtype=np.uint8)
@@ -669,7 +779,7 @@ class MonitorTest(unittest.TestCase):
         parar = Event()
         eventos = SimpleQueue()
         ciclos = [0]
-        instantes = iter((0.0, 1.0, 2.0, 3.0))
+        instantes = iter(range(20))
 
         def aguardar(_):
             ciclos[0] += 1
@@ -701,6 +811,31 @@ class MonitorTest(unittest.TestCase):
         self.assertEqual(len(avisos), 1)
         self.assertIn("bau_visivel", texto)
         self.assertIn("Nenhuma entrada enviada", avisos[0])
+
+
+class NotificadorTest(unittest.TestCase):
+    def test_api_do_windows_registra_mostra_e_remove_notificacao(self):
+        chamadas = []
+
+        class Shell32:
+            def Shell_NotifyIconW(self, operacao, estrutura):
+                dados = estrutura._obj
+                chamadas.append((
+                    operacao, dados.uFlags, dados.szInfoTitle, dados.szInfo,
+                ))
+                return 1
+
+        class User32:
+            @staticmethod
+            def LoadIconW(*_):
+                return 1
+
+        notificador = NotificadorWindows(42, Shell32(), User32())
+        notificador.notificar("T" * 70, "M" * 300)
+        notificador.fechar()
+        self.assertEqual([chamada[0] for chamada in chamadas], [NIM_ADD, NIM_MODIFY, NIM_DELETE])
+        self.assertEqual(len(chamadas[1][2]), 63)
+        self.assertEqual(len(chamadas[1][3]), 255)
 
 
 class WindowsTest(unittest.TestCase):

@@ -44,6 +44,7 @@ class Config:
     minutos_partida: float = 6.5
     anti_afk: bool = True
     avisar_bau: bool = False
+    notificacoes: bool = True
 
 
 @dataclass(frozen=True)

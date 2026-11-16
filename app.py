@@ -1,6 +1,7 @@
 """Interface do Auto Farm para Windows."""
 
 from dataclasses import asdict, replace
+from datetime import datetime
 import hashlib
 import json
 import logging
@@ -26,6 +27,7 @@ from atualizador import (
 from logica_autofarm import (
     Config, Detector, DetectorBau, Fluxo, ObservadorBau, TECLAS, TEMPLATES,
 )
+from notificacoes import NotificadorWindows
 from versao import VERSAO
 from windows_game import Windows
 
@@ -44,7 +46,7 @@ CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 LOG_FILE = CONFIG.with_name("autofarm.log")
 CHEST_REFERENCE = CONFIG.with_name("referencia_bau.png")
 CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk",
-          "avisar_bau", "minutos_partida")
+          "avisar_bau", "notificacoes", "minutos_partida")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
     "lobby_pronto": "Pronto", "menu_aba": "Abrir menu", "voltar_lobby": "Voltar ao lobby",
@@ -98,6 +100,26 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
     logger = None
     observador_bau = ObservadorBau()
     proxima_busca_bau = 0.0
+    inicio_monotonic = time.monotonic()
+    relatorio = {
+        "versao": VERSAO,
+        "inicio_local": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "fim_local": None,
+        "duracao_segundos": 0.0,
+        "filas_confirmadas": 0,
+        "partidas_iniciadas": 0,
+        "retornos_ao_lobby": 0,
+        "alertas_bau": 0,
+        "falhas_de_entrada": 0,
+        "interrupcoes_foco_janela": 0,
+        "erros": [],
+    }
+    retorno_lobby_pendente = False
+
+    def avisar(titulo, mensagem):
+        if fluxo.config.notificacoes:
+            eventos.put(("notificacao", (titulo, mensagem)))
+
     aguardar = getattr(windows, "aguardar", parar.wait)
     try:
         logger = configurar_logger()
@@ -133,9 +155,21 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                 dialogo_ambiguo_anterior = detector.dialogo_ambiguo
                 onibus = bool(detector.procurar(quadro, ("onibus",), 0.8))
                 contagem = fluxo.partidas
+                partida_antes = fluxo.inicio_partida is not None
                 instante = time.monotonic()
                 acao = fluxo.passo(quadro, instante, partida=partida, cursor=cursor,
                                    no_onibus=onibus, hud_visivel=hud_visivel)
+                partida_agora = fluxo.inicio_partida is not None
+                if not partida_antes and partida_agora:
+                    relatorio["partidas_iniciadas"] += 1
+                    avisar("Partida reconhecida", "O Auto Farm confirmou uma partida nova.")
+                if partida_antes and not partida_agora and retorno_lobby_pendente:
+                    relatorio["retornos_ao_lobby"] += 1
+                    avisar("Retorno ao lobby", "O retorno ao lobby foi reconhecido.")
+                    retorno_lobby_pendente = False
+                if (acao and (acao.tipo == "esc" or (
+                        acao.tipo == "clicar" and acao.alvo and acao.alvo.nome == "voltar_lobby"))):
+                    retorno_lobby_pendente = True
                 alvo_bau = None
                 if detector_bau is not None:
                     if (partida and fluxo.inicio_partida is not None and not inventario
@@ -144,13 +178,15 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                             alvo_bau = detector_bau.detectar(quadro)
                             proxima_busca_bau = instante + 0.9
                             if observador_bau.observar(alvo_bau, quadro.shape[0]) and alvo_bau:
+                                relatorio["alertas_bau"] += 1
                                 x, y = (round(ponto) for ponto in alvo_bau.centro)
                                 logger.info("bau_visivel caixa=%s score=%.3f",
                                             alvo_bau.caixa, alvo_bau.score)
-                                eventos.put((
-                                    "acao",
-                                    f"Baú visível detectado perto de ({x}, {y}). Nenhuma entrada enviada.",
-                                ))
+                                mensagem = (
+                                    f"Baú visível detectado perto de ({x}, {y}). Nenhuma entrada enviada."
+                                )
+                                eventos.put(("acao", mensagem))
+                                avisar("Baú visível", mensagem)
                     else:
                         proxima_busca_bau = 0.0
                         observador_bau.observar(None, quadro.shape[0])
@@ -217,12 +253,14 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                     try:
                         executada = windows.executar(janela, acao, parar)
                     except (OSError, ValueError, cv2.error):
+                        relatorio["falhas_de_entrada"] += 1
                         logger.exception("acao_com_erro tipo=%s alvo=%s", acao.tipo, alvo)
                         raise
                     if executada:
                         logger.info("acao_enviada tipo=%s alvo=%s", acao.tipo, alvo)
                     else:
                         motivo = getattr(windows, "ultima_falha", None) or "entrada_recusada"
+                        relatorio["falhas_de_entrada"] += 1
                         logger.warning(
                             "acao_nao_concluida tipo=%s alvo=%s tentativa=%s motivo=%s",
                             acao.tipo, alvo, acao.tentativa, motivo,
@@ -232,6 +270,7 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                 if acao and acao.tipo == "clicar":
                     fluxo.registrar_clique(acao, executada, time.monotonic(), hud_visivel=hud_visivel)
                 if fluxo.partidas != contagem:
+                    relatorio["filas_confirmadas"] += max(0, fluxo.partidas - contagem)
                     logger.info("partida_confirmada contador=%s cronometro_iniciado=true", fluxo.partidas)
                     eventos.put(("total", fluxo.partidas))
                 if executada:
@@ -276,16 +315,26 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                     assinatura_anterior = assinatura
             if estado != estado_anterior:
                 eventos.put(("estado", estado))
+                if estado == "Aguardando o Fortnite em primeiro plano":
+                    relatorio["interrupcoes_foco_janela"] += 1
+                    avisar("Fortnite sem foco", "O monitor aguarda o Fortnite em primeiro plano.")
+                elif estado_anterior == "Aguardando o Fortnite em primeiro plano":
+                    avisar("Foco restaurado", "O Fortnite voltou ao primeiro plano.")
                 estado_anterior = estado
             aguardar(0.18 if pronto else 0.3)
     except (OSError, ValueError, cv2.error) as erro:
+        relatorio["erros"].append(f"{type(erro).__name__}: {erro}")
         if logger:
             logger.exception("monitor_encerrado_com_erro")
         eventos.put(("erro", str(erro)))
+        avisar("Erro no Auto Farm", str(erro))
     finally:
         fluxo.pausar()
         if logger:
             logger.info("monitor_encerrado")
+        relatorio["fim_local"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        relatorio["duracao_segundos"] = round(max(0.0, time.monotonic() - inicio_monotonic), 1)
+        eventos.put(("relatorio", relatorio))
         eventos.put(("fim", None))
 
 
@@ -306,6 +355,8 @@ class Painel:
         self.worker = self.parar = None
         self.worker_atualizacao = None
         self.release_disponivel = None
+        self.resumo_sessao = None
+        self.notificador = None
         self.f6_anterior = self.fechando = False
         self.status = tk.StringVar(janela, "Pausado")
         self.atividade = tk.StringVar(janela, "A sessão começa quando você clicar em Iniciar.")
@@ -318,7 +369,7 @@ class Painel:
         janela.title(f"Auto Farm · {VERSAO}")
         janela.configure(bg=BG)
         janela.minsize(640, 660)
-        janela.geometry("720x740")
+        janela.geometry("720x780")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         self.estilo()
         self.montar()
@@ -407,6 +458,7 @@ class Painel:
             ("anti_afk", "Ativar movimento anti-AFK"),
             ("sair_por_tempo", "Retornar ao lobby por tempo"),
             ("avisar_bau", "Avisar ao detectar baú visível"),
+            ("notificacoes", "Notificações do Windows"),
         )
         for indice, (nome, texto) in enumerate(opcoes):
             coluna, linha = indice % 2, indice // 2
@@ -432,8 +484,16 @@ class Painel:
         ttk.Button(comandos, text="Configurar baú", command=self.selecionar_referencia_bau).pack(
             side="left", padx=(0, 8),
         )
-        ttk.Button(comandos, text="Abrir log", command=self.abrir_log).pack(side="left")
         ttk.Label(comandos, text="F6  ·  iniciar / pausar", style="Info.TLabel").pack(side="right")
+
+        diagnosticos = ttk.Frame(painel)
+        diagnosticos.pack(fill="x", pady=(0, 18))
+        ttk.Button(diagnosticos, text="Abrir log", command=self.abrir_log).pack(side="left")
+        self.botao_relatorio = ttk.Button(
+            diagnosticos, text="Exportar resumo da sessão", command=self.exportar_resumo,
+        )
+        self.botao_relatorio.pack(side="left", padx=(10, 0))
+        self.botao_relatorio.state(["disabled"])
 
         atualizacao = ttk.Frame(painel, style="Card.TFrame", padding=(15, 11))
         atualizacao.pack(fill="x")
@@ -580,6 +640,8 @@ class Painel:
         self.fluxo.rearmar_fila()
         self.status.set("Iniciando")
         self.botao.configure(text="Pausar")
+        self.resumo_sessao = None
+        self.botao_relatorio.state(["disabled"])
         self.parar = Event()
         self.worker = Thread(
             target=monitorar,
@@ -658,6 +720,53 @@ class Painel:
         except OSError as erro:
             self.atividade.set(f"Não foi possível abrir o log: {erro}")
 
+    def exportar_resumo(self):
+        if self.resumo_sessao is None:
+            self.atividade.set("O resumo ficará disponível ao pausar ou encerrar o monitoramento.")
+            return
+        caminho = filedialog.asksaveasfilename(
+            parent=self.janela, title="Exportar resumo da sessão",
+            defaultextension=".json", filetypes=[("Relatório JSON", "*.json")],
+        )
+        if not caminho:
+            return
+        try:
+            Path(caminho).write_text(
+                json.dumps(self.resumo_sessao, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as erro:
+            self.atividade.set(f"Não foi possível salvar o resumo: {erro}")
+            return
+        self.atividade.set(f"Resumo exportado: {caminho}")
+
+    def notificar_windows(self, titulo, mensagem):
+        if self.fechando or not self.opcoes["notificacoes"].get():
+            return
+        try:
+            if self.notificador is None:
+                self.notificador = NotificadorWindows(self.janela.winfo_id())
+            self.notificador.notificar(titulo, mensagem)
+        except (OSError, RuntimeError) as erro:
+            self.atividade.set(f"Notificações do Windows indisponíveis: {erro}")
+            try:
+                configurar_logger().warning("notificacao_falhou titulo=%s erro=%s", titulo, erro)
+            except OSError as erro_log:
+                self.atividade.set(f"Notificação falhou: {erro} · log indisponível: {erro_log}")
+
+    def remover_notificador(self):
+        if self.notificador is None:
+            return
+        try:
+            self.notificador.fechar()
+        except OSError as erro:
+            try:
+                configurar_logger().warning("notificacao_encerramento_falhou erro=%s", erro)
+            except OSError as erro_log:
+                self.atividade.set(f"Falha ao remover notificação: {erro} · log indisponível: {erro_log}")
+        else:
+            self.notificador = None
+
     def mostrar_teste(self, quadro, texto):
         janela = tk.Toplevel(self.janela)
         janela.title("Teste de imagem")
@@ -685,6 +794,11 @@ class Painel:
             if evento == "estado":
                 if self.parar is not None and not self.parar.is_set():
                     self.status.set(valor)
+            elif evento == "notificacao":
+                self.notificar_windows(*valor)
+            elif evento == "relatorio":
+                self.resumo_sessao = valor
+                self.botao_relatorio.state(["!disabled"])
             elif evento == "total":
                 self.total.set(str(valor))
             elif evento in ("acao", "erro"):
@@ -728,6 +842,7 @@ class Painel:
                 self.fechar()
         self.atualizar_indicador_status()
         if self.fechando and (self.worker is None or not self.worker.is_alive()):
+            self.remover_notificador()
             self.janela.destroy()
         else:
             self.janela.after(45, self.atualizar)
@@ -855,6 +970,8 @@ def verificar_build():
     painel = Painel(janela, windows, config=Config())
     if not hasattr(painel, "botao_atualizacao"):
         raise RuntimeError("O painel de atualização não foi criado.")
+    if not hasattr(painel, "botao_relatorio"):
+        raise RuntimeError("O botão de exportação do resumo não foi criado.")
     janela.update_idletasks()
     janela.destroy()
 
