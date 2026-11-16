@@ -124,8 +124,11 @@ class Windows:
                 and not parar.is_set() and self.user.GetForegroundWindow() == janela.hwnd)
 
     def _enviar(self, evento):
+        ctypes.set_last_error(0)
         if self.user.SendInput(1, ctypes.byref(evento), ctypes.sizeof(Entrada)) != 1:
-            raise OSError("O Windows recusou o comando de entrada.")
+            erro = ctypes.get_last_error()
+            detalhe = f" (código {erro})" if erro else ""
+            raise OSError(f"O Windows recusou o comando de entrada{detalhe}.")
 
     def _tecla(self, scan, soltando=False):
         self._enviar(Entrada(1, Dados(tecla=Tecla(scan=scan, flags=8 | (2 if soltando else 0)))))

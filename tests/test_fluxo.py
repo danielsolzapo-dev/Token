@@ -1,3 +1,4 @@
+from dataclasses import replace
 from queue import SimpleQueue
 from threading import Event
 from types import SimpleNamespace
@@ -186,6 +187,40 @@ class FluxoTest(unittest.TestCase):
         self.assertIsNone(self.passo(9))
         self.assertIsNone(self.passo(10, "jogar"))
         self.assertEqual(self.passo(10.2, "jogar").alvo.nome, "jogar")
+
+    def habilitar_movimento(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True, sair_por_tempo=False)
+
+    def test_icone_do_menu_isolado_nao_bloqueia_caminhada(self):
+        self.habilitar_movimento()
+        self.detector.fora_de_partida = lambda _: True
+        self.assertIsNone(self.passo(0, "menu_aba", partida=True))
+        acao = self.passo(0.3, "menu_aba", partida=True)
+        self.assertEqual(acao.tipo, "movimento")
+        self.assertEqual(acao.passos, (("teclas", (17,), 0.8),))
+
+    def test_menu_de_saida_bloqueia_caminhada(self):
+        self.habilitar_movimento()
+        for instante in (0, 0.3):
+            self.assertEqual(self.passo(instante, "voltar_lobby", partida=True, cursor=True).tipo,
+                             "movimento_menu")
+        self.assertIsNone(self.passo(0.6, partida=True))
+        self.assertEqual(self.passo(0.9, partida=True).tipo, "movimento")
+
+    def test_anti_afk_reenvia_caminhada_mesmo_se_plano_so_girar_camera(self):
+        self.habilitar_movimento()
+        self.passo(0, partida=True)
+        self.assertEqual(self.passo(0.3, partida=True).passos, (("teclas", (17,), 0.8),))
+        with patch("logica_autofarm.plano_anti_afk", return_value=([("mouse", 90, 0, 0.2)], (0, 0.8, 0))):
+            self.assertEqual(self.passo(2, partida=True).passos, (("mouse", 90, 0, 0.2),))
+            self.assertEqual(self.passo(6, partida=True).passos, (("teclas", (17,), 0.8),))
+
+    def test_perda_de_foco_exige_hud_reconfirmado_para_mover(self):
+        self.habilitar_movimento()
+        self.assertIsNone(self.passo(0, partida=True))
+        self.assertIsNone(self.passo(0.3, partida=True, foco=False))
+        self.assertIsNone(self.passo(0.6, partida=True))
+        self.assertEqual(self.passo(0.9, partida=True).tipo, "movimento")
 
 
 class DetectorTest(unittest.TestCase):

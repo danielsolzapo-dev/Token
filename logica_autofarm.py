@@ -347,6 +347,8 @@ class Fluxo:
         self._troca_humor = 0.0
         self._desvio = (0.0, 0.0, 0.0)
         self._sem_pulo_ate = 0.0
+        self._quadros_hud_afk = 0
+        self._proxima_caminhada = 0.0
 
     def pausar(self):
         self.confirmacao.limpar()
@@ -355,12 +357,15 @@ class Fluxo:
         self._leituras_cancelamento = 0
         self._sem_leitura_desde = None
         self._aviso_leitura = False
+        self._quadros_hud_afk = 0
 
     def _iniciar_partida(self, agora):
         self.inicio_partida = agora
         self._aguarda_hud_novo = False
         self._desvio = (0.0, 0.0, 0.0)
         self._sem_pulo_ate = 0.0
+        self._quadros_hud_afk = 0
+        self._proxima_caminhada = agora
 
     def _procurar(self, quadro, *nomes):
         return self.detector.procurar(quadro, nomes)
@@ -494,6 +499,8 @@ class Fluxo:
             return None
         if agora < self._proxima_acao:
             return None
+        if not partida:
+            self._quadros_hud_afk = 0
         hud_visivel = partida if hud_visivel is None else hud_visivel
         if self._pendente:
             return self._verificar_clique(quadro, agora, hud_visivel, no_onibus)
@@ -567,11 +574,29 @@ class Fluxo:
         elif not self._aviso_leitura and agora - self._sem_leitura_desde >= self.config.timeout_lobby:
             self._aviso_leitura = True
             return Acao("tela_nao_reconhecida")
-        if not (partida and self.config.anti_afk) or self.detector.fora_de_partida(quadro):
+        if not (partida and self.config.anti_afk):
             return None
+        # O ícone do menu isolado também pode aparecer junto do HUD de jogo.
+        # Exige o controle de saída, com limiar maior se não houver cursor.
+        if self.detector.procurar(quadro, ("voltar_lobby",), limiar=None if cursor else 0.92):
+            self._quadros_hud_afk = 0
+            return Acao("movimento_menu")
         if cursor and self._procurar(quadro, "inventario"):
+            self._quadros_hud_afk = 0
             self._proxima_acao = agora + 1.5
             return Acao("esc")
+        self._quadros_hud_afk += 1
+        if self._quadros_hud_afk < 2:
+            return None
+        if agora >= self._proxima_caminhada:
+            x, y, rumo = self._desvio
+            tecla = "S" if x * math.sin(math.radians(rumo)) + y * math.cos(math.radians(rumo)) > 1 else "W"
+            duracao = 0.8
+            x, y = _andar(x, y, rumo, tecla, duracao)
+            self._desvio = x, y, rumo
+            self._proxima_caminhada = agora + 5.0
+            self._proxima_acao = agora + duracao + 0.2
+            return Acao("movimento", passos=(("teclas", (TECLAS[tecla],), duracao),))
         if self._humor is None or agora >= self._troca_humor:
             self._humor = self.rng.choice([h for h in HUMORES if h != self._humor])
             self._troca_humor = agora + self.rng.uniform(20, 90)

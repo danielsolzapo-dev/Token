@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-from logica_autofarm import Config, Detector, Fluxo, TEMPLATES
+from logica_autofarm import Config, Detector, Fluxo, TECLAS, TEMPLATES
 from versao import VERSAO
 from windows_game import Windows
 
@@ -89,9 +89,15 @@ def monitorar(windows, fluxo, eventos, parar):
                 if executada:
                     if acao.tipo == "clicar":
                         texto = "Clique enviado em " + ROTULOS.get(acao.alvo.nome, acao.alvo.nome)
+                    elif acao.tipo == "movimento":
+                        teclas = [nome for nome, scan in TECLAS.items()
+                                  if any(p[0] in ("teclas", "andar_mouse") and scan in p[1] for p in acao.passos)]
+                        texto = (f"Anti-AFK · caminhada enviada ({'/'.join(teclas)}) às {time.strftime('%H:%M:%S')}"
+                                 if teclas else None)
                     else:
                         texto = {
-                            "esc": "Esc enviado", "movimento": "Movimento anti-AFK",
+                            "esc": "Esc enviado",
+                            "movimento_menu": "Anti-AFK aguardando fechar o menu de saída.",
                             "clique_confirmado": "Botão saiu da tela",
                             "clique_ignorado": "Botão continua visível após três tentativas",
                             "menu_nao_encontrado": "Menu de saída não encontrado",
@@ -104,7 +110,7 @@ def monitorar(windows, fluxo, eventos, parar):
                             "partida_nao_confirmada": "Nenhuma partida reconhecida dentro do prazo",
                             "tela_nao_reconhecida": "Tela sem sinais conhecidos. Verifique o jogo ou use Testar imagem.",
                         }[acao.tipo]
-                    if texto != acao_anterior:
+                    if texto and texto != acao_anterior:
                         eventos.put(("acao", texto))
                         acao_anterior = texto
                 elif acao:

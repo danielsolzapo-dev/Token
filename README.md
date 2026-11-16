@@ -14,6 +14,8 @@ O contador só avança após reconhecer a fila ou a nova partida. Se uma fila co
 
 Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção visual foi verificada com imagens de teste e pode variar com a versão do jogo e a escala do HUD.
 
+Com o anti-AFK ativo e o personagem em partida, o app envia movimento pelas teclas padrão W/A/S/D. A linha de atividade mostra a última caminhada enviada ou indica quando o menu de saída está bloqueando o movimento.
+
 ## Desenvolvimento
 
 Use o Python 3.14 no Windows.
