@@ -43,6 +43,7 @@ class Config:
     sair_por_tempo: bool = True
     minutos_partida: float = 6.5
     anti_afk: bool = True
+    avisar_bau: bool = False
 
 
 @dataclass(frozen=True)
@@ -298,6 +299,80 @@ class Confirmacao:
             return False
         self.limpar()
         return True
+
+
+class DetectorBau:
+    def __init__(self, referencia=None, imagem=None, limiar=0.90):
+        self.limiar = limiar
+        if imagem is not None:
+            quadro = imagem
+        elif referencia is not None:
+            quadro = cv2.imdecode(np.frombuffer(Path(referencia).read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+            if quadro is None:
+                raise ValueError("Não foi possível ler a referência de baú.")
+        else:
+            raise ValueError("Selecione uma imagem de referência de baú.")
+        altura, largura = quadro.shape[:2]
+        cinza = cv2.cvtColor(quadro, cv2.COLOR_BGR2GRAY)
+        if not (20 <= largura <= 512 and 20 <= altura <= 512):
+            raise ValueError("A referência deve ser um recorte de 20 a 512 pixels por lado.")
+        if float(cinza.std()) < 5:
+            raise ValueError("A referência precisa mostrar detalhes visuais do baú.")
+        self.referencia = cinza
+
+    def detectar(self, quadro):
+        fator = min(1.0, 540 / quadro.shape[0])
+        reduzido = _resize(quadro, fator)
+        cinza = cv2.cvtColor(reduzido, cv2.COLOR_BGR2GRAY)
+        referencia = _resize(self.referencia, fator)
+        melhor = None
+        for escala in (0.75, 0.85, 0.95, 1.0, 1.05, 1.15, 1.25):
+            template = _resize(referencia, escala)
+            altura, largura = template.shape[:2]
+            if largura > cinza.shape[1] or altura > cinza.shape[0] or min(largura, altura) < 8:
+                continue
+            matriz = cv2.matchTemplate(cinza, template, cv2.TM_CCOEFF_NORMED)
+            _, score, _, (x, y) = cv2.minMaxLoc(matriz)
+            if not math.isfinite(score):
+                continue
+            recorte = cinza[y:y + altura, x:x + largura]
+            if float(recorte.std()) < 5:
+                continue
+            if melhor is None or score > melhor.score:
+                caixa = tuple(round(v / fator) for v in (x, y, largura, altura))
+                melhor = Alvo("bau", score, caixa, escala, "referencia")
+        return melhor if melhor and melhor.score >= self.limiar else None
+
+
+class ObservadorBau:
+    def __init__(self, confirmacoes=2, perdas_para_limpar=2):
+        self.confirmacoes = confirmacoes
+        self.perdas_para_limpar = perdas_para_limpar
+        self.centro = None
+        self.total = 0
+        self.perdas = 0
+        self.avisado = False
+
+    def observar(self, alvo, altura):
+        if alvo is None:
+            self.perdas += 1
+            if self.perdas >= self.perdas_para_limpar:
+                self.centro = None
+                self.total = self.perdas = 0
+                self.avisado = False
+            return False
+        self.perdas = 0
+        centro = alvo.centro
+        tolerancia = altura * 0.06
+        mesmo = self.centro is not None and all(
+            abs(a - b) <= tolerancia for a, b in zip(centro, self.centro)
+        )
+        self.total = self.total + 1 if mesmo else 1
+        self.centro = centro
+        if self.total >= self.confirmacoes and not self.avisado:
+            self.avisado = True
+            return True
+        return False
 
 
 @dataclass(frozen=True)

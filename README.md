@@ -9,8 +9,11 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 1. Abra o executável e ajuste as opções antes de iniciar.
 2. Deixe o Fortnite em primeiro plano, em modo janela ou tela cheia em janela, e clique em **Iniciar**. **F6** inicia ou pausa.
 3. Use **Testar imagem** para inspecionar um PNG, JPG ou BMP. O diagnóstico marca a caixa e o centro detectados e exibe método e score; essa função nunca envia teclado ou mouse.
+4. Opcionalmente, escolha **Configurar baú** para carregar um recorte de imagem de um baú visível (20–512 px por lado), ative **Avisar ao detectar baú visível** e inicie o monitoramento.
 
 O app procura **Jogar Novamente**, **Continuar** e os botões do lobby. A detecção usa imagens de referência em múltiplas escalas; a alternativa amarelo+OCR para **Jogar Novamente** só aceita o rótulo dentro do controle. A leitura em português ou inglês identifica fila e diálogo de saída, e não confirma quando há mais de um diálogo plausível.
+
+O aviso de baú compara a captura com o recorte escolhido, em múltiplas escalas e com duas detecções estáveis. Só funciona com o Fortnite em foco, após reconhecer uma partida nova e fora do ônibus, inventário ou pausa; **Testar imagem** também mostra a caixa reconhecida, centro, método e score. A referência fica local em `%LOCALAPPDATA%\AutoFarmToken\referencia_bau.png` e não é enviada. Como é correspondência de imagem, mudanças de câmera, iluminação, distância ou aparência podem causar falsos negativos ou positivos; prefira um recorte nítido do baú com pouco fundo. O app não interpreta o mapa, não localiza baús fora da tela, não navega até eles e não os abre; o aviso não envia entrada ao jogo.
 
 O contador avança uma vez por fila reconhecida. O cronômetro e o movimento anti-AFK só começam após uma transição confirmada e três leituras estáveis do HUD de uma partida nova. Se já havia HUD no clique, ele precisa desaparecer em pelo menos quatro leituras ao longo de 0,65 s antes de reaparecer; um HUD persistente ou uma falha isolada de leitura não inicia a partida. O ônibus, mesmo já visível antes do clique, não confirma partida sozinho. Um botão de lobby reaparecendo não reinicia a fila automaticamente: depois do timeout, recomece com **Iniciar/F6** ou aguarde o reconhecimento explícito de cancelamento.
 

@@ -13,7 +13,9 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from app import Painel, configurar_logger, monitorar
-from logica_autofarm import Acao, Alvo, Config, Detector, Fluxo, TEMPLATES
+from logica_autofarm import (
+    Acao, Alvo, Config, Detector, DetectorBau, Fluxo, ObservadorBau, TEMPLATES,
+)
 from texto_tela import Linha, Reconhecedor, identificar
 from windows_game import Janela, Windows
 
@@ -376,6 +378,49 @@ class DetectorTest(unittest.TestCase):
         self.assertIsNone(identificar([jogar, separado], 250, 50, "jogar"))
 
 
+class DetectorBauTest(unittest.TestCase):
+    @staticmethod
+    def referencia_sintetica():
+        imagem = np.full((48, 56, 3), (38, 29, 24), dtype=np.uint8)
+        cv2.rectangle(imagem, (5, 9), (50, 39), (10, 115, 218), -1)
+        cv2.rectangle(imagem, (9, 14), (46, 34), (24, 177, 245), 2)
+        cv2.line(imagem, (8, 24), (48, 24), (55, 215, 255), 3)
+        cv2.circle(imagem, (28, 29), 3, (20, 45, 80), -1)
+        return imagem
+
+    def test_detecta_referencia_visivel_e_rejeita_imagem_diferente(self):
+        referencia = self.referencia_sintetica()
+        detector = DetectorBau(imagem=referencia)
+        quadro = np.zeros((180, 260, 3), dtype=np.uint8)
+        quadro[71:119, 102:158] = referencia
+        alvo = detector.detectar(quadro)
+        self.assertIsNotNone(alvo)
+        self.assertEqual(alvo.nome, "bau")
+        self.assertEqual(alvo.metodo, "referencia")
+        self.assertAlmostEqual(alvo.centro[0], 130, delta=3)
+        self.assertAlmostEqual(alvo.centro[1], 95, delta=3)
+        diferente = np.zeros_like(quadro)
+        cv2.rectangle(diferente, (102, 71), (158, 119), (0, 230, 0), -1)
+        self.assertIsNone(detector.detectar(diferente))
+
+    def test_recusa_referencia_sem_detalhes_ou_grande_demais(self):
+        with self.assertRaisesRegex(ValueError, "detalhes"):
+            DetectorBau(imagem=np.zeros((40, 40, 3), dtype=np.uint8))
+        with self.assertRaisesRegex(ValueError, "20 a 512"):
+            DetectorBau(imagem=self.referencia_sintetica().repeat(12, axis=0))
+
+    def test_aviso_exige_deteccao_estavel_e_nao_repete_ate_sumir(self):
+        observador = ObservadorBau()
+        alvo = Alvo("bau", 0.98, (80, 60, 50, 40), 1.0, "referencia")
+        self.assertFalse(observador.observar(alvo, 540))
+        self.assertTrue(observador.observar(alvo, 540))
+        self.assertFalse(observador.observar(alvo, 540))
+        self.assertFalse(observador.observar(None, 540))
+        self.assertFalse(observador.observar(None, 540))
+        self.assertFalse(observador.observar(alvo, 540))
+        self.assertTrue(observador.observar(alvo, 540))
+
+
 MODELOS = Path(__file__).resolve().parents[1] / "modelos"
 OCR_DISPONIVEL = all((MODELOS / nome).is_file() for nome in (
     "PP-OCRv6_det_small.onnx", "latin_PP-OCRv5_rec_mobile.onnx",
@@ -468,6 +513,24 @@ class OcrRealTest(unittest.TestCase):
 
 
 class PainelTest(unittest.TestCase):
+    def test_configurar_referencia_salva_recorte_validado_localmente(self):
+        painel = object.__new__(Painel)
+        painel.janela = None
+        mensagens = []
+        painel.atividade = SimpleNamespace(set=mensagens.append)
+        referencia = DetectorBauTest.referencia_sintetica()
+
+        with TemporaryDirectory() as diretorio:
+            caminho = Path(diretorio) / "referencia_bau.png"
+            with patch("app.CHEST_REFERENCE", caminho), \
+                    patch("app.filedialog.askopenfilename", return_value="recorte.png"), \
+                    patch("app.detectar_arquivo", return_value=referencia):
+                painel.selecionar_referencia_bau()
+            salva = cv2.imdecode(np.frombuffer(caminho.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
+
+        self.assertTrue(np.array_equal(salva, referencia))
+        self.assertIn("Referência salva", mensagens[0])
+
     def test_testar_imagem_exibe_metadados_sem_enviar_entrada(self):
         chamadas = []
         painel = object.__new__(Painel)
@@ -498,6 +561,46 @@ class PainelTest(unittest.TestCase):
         self.assertIn("template", texto)
         self.assertIn("score 91%", texto)
         self.assertTrue(np.array_equal(quadro[20, 30], (0, 0, 255)))
+
+    def test_testar_imagem_detecta_bau_sem_enviar_entrada(self):
+        chamadas = []
+        painel = object.__new__(Painel)
+        painel.janela = None
+        painel.windows = SimpleNamespace(executar=lambda *args: self.fail("não deve enviar entrada"))
+        painel.ler_opcoes = lambda: Config()
+        painel.mostrar_teste = lambda quadro, texto: chamadas.append((quadro.copy(), texto))
+        referencia = DetectorBauTest.referencia_sintetica()
+        captura = np.zeros((180, 260, 3), dtype=np.uint8)
+        captura[71:119, 102:158] = referencia
+
+        class DetectorSimulado:
+            dialogo_ambiguo = False
+
+            def __init__(self, config):
+                pass
+
+            def ler_contexto(self, quadro, tipo):
+                return None
+
+            def detectar(self, quadro):
+                return None
+
+            def procurar(self, quadro, nomes):
+                return None
+
+        with TemporaryDirectory() as diretorio:
+            caminho = Path(diretorio) / "referencia_bau.png"
+            self.assertTrue(cv2.imwrite(str(caminho), referencia))
+            with patch("app.CHEST_REFERENCE", caminho), \
+                    patch("app.filedialog.askopenfilename", return_value="captura.png"), \
+                    patch("app.detectar_arquivo", return_value=captura.copy()), \
+                    patch("app.Detector", DetectorSimulado):
+                painel.testar()
+
+        quadro, texto = chamadas[0]
+        self.assertIn("Baú visível", texto)
+        self.assertIn("referência de imagem", texto)
+        self.assertTrue(np.array_equal(quadro[95, 130], (0, 0, 255)))
 
 
 class MonitorTest(unittest.TestCase):
@@ -545,6 +648,59 @@ class MonitorTest(unittest.TestCase):
         self.assertIn("motivo=entrada_recusada", texto)
         self.assertIn("acao_com_erro", texto)
         self.assertIn(("erro", "falha simulada"), eventos_lidos)
+
+    def test_monitor_avisa_bau_estavel_sem_enviar_entrada(self):
+        quadro = np.zeros((540, 960, 3), dtype=np.uint8)
+        detector_tela = SimpleNamespace(
+            templates=dict.fromkeys(TEMPLATES), dialogo_ambiguo=False,
+            em_partida=lambda _: True, procurar=lambda *_args, **_kwargs: None,
+        )
+        fluxo = SimpleNamespace(
+            config=Config(anti_afk=False, avisar_bau=True), detector=detector_tela,
+            inicio_partida=1.0, partidas=0, passo=lambda *_args, **_kwargs: None,
+            pausar=lambda: None,
+        )
+        alvo = Alvo("bau", 0.97, (120, 80, 40, 35), 1.0, "referencia")
+
+        class BaúsSimulados:
+            def detectar(self, _):
+                return alvo
+
+        parar = Event()
+        eventos = SimpleQueue()
+        ciclos = [0]
+        instantes = iter((0.0, 1.0, 2.0, 3.0))
+
+        def aguardar(_):
+            ciclos[0] += 1
+            if ciclos[0] == 4:
+                parar.set()
+
+        windows = SimpleNamespace(
+            fortnite_em_foco=lambda: 42, capturar=lambda _: quadro.copy(),
+            disponivel=lambda *_: True, cursor_visivel=lambda: False,
+            executar=lambda *_: self.fail("detecção de baú não deve enviar entrada"),
+            aguardar=aguardar,
+        )
+        with TemporaryDirectory() as diretorio:
+            logger = configurar_logger(Path(diretorio) / "autofarm.log")
+            with patch("app.configurar_logger", return_value=logger), \
+                    patch("app.time", SimpleNamespace(monotonic=lambda: next(instantes))):
+                monitorar(windows, fluxo, eventos, parar, BaúsSimulados())
+            for handler in logger.handlers:
+                handler.flush()
+            texto = (Path(diretorio) / "autofarm.log").read_text(encoding="utf-8")
+            for handler in logger.handlers:
+                logger.removeHandler(handler)
+                handler.close()
+        eventos_lidos = []
+        while not eventos.empty():
+            eventos_lidos.append(eventos.get())
+        avisos = [valor for evento, valor in eventos_lidos
+                  if evento == "acao" and "Baú visível detectado" in valor]
+        self.assertEqual(len(avisos), 1)
+        self.assertIn("bau_visivel", texto)
+        self.assertIn("Nenhuma entrada enviada", avisos[0])
 
 
 class WindowsTest(unittest.TestCase):

@@ -23,7 +23,9 @@ from atualizador import (
     ErroAtualizacao, baixar_atualizacao, buscar_atualizacao, criar_script_instalacao,
     iniciar_instalacao, preparar_executavel,
 )
-from logica_autofarm import Config, Detector, Fluxo, TECLAS, TEMPLATES
+from logica_autofarm import (
+    Config, Detector, DetectorBau, Fluxo, ObservadorBau, TECLAS, TEMPLATES,
+)
 from versao import VERSAO
 from windows_game import Windows
 
@@ -40,11 +42,14 @@ LARANJA = "#f0b76b"
 VERMELHO = "#f07b83"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 LOG_FILE = CONFIG.with_name("autofarm.log")
-CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "minutos_partida")
+CHEST_REFERENCE = CONFIG.with_name("referencia_bau.png")
+CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk",
+          "avisar_bau", "minutos_partida")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
     "lobby_pronto": "Pronto", "menu_aba": "Abrir menu", "voltar_lobby": "Voltar ao lobby",
     "resgatar": "Resgatar", "confirmar_sair": "Confirmar saída", "aba_jogar": "Aba Jogar",
+    "bau": "Baú visível",
 }
 
 
@@ -86,16 +91,20 @@ def salvar_config(config):
     provisoria.replace(CONFIG)
 
 
-def monitorar(windows, fluxo, eventos, parar):
+def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
     estado_anterior = acao_anterior = None
     assinatura_anterior = None
     dialogo_ambiguo_anterior = False
     logger = None
+    observador_bau = ObservadorBau()
+    proxima_busca_bau = 0.0
     aguardar = getattr(windows, "aguardar", parar.wait)
     try:
         logger = configurar_logger()
         logger.info("monitor_iniciado versao=%s", VERSAO)
         detector = fluxo.detector
+        if fluxo.config.avisar_bau and detector_bau is None:
+            raise ValueError("Selecione uma referência de baú antes de iniciar o aviso.")
         if faltando := TEMPLATES.keys() - detector.templates.keys():
             raise ValueError("Imagens de referência ausentes: " + ", ".join(sorted(faltando)))
         while not parar.is_set():
@@ -127,6 +136,24 @@ def monitorar(windows, fluxo, eventos, parar):
                 instante = time.monotonic()
                 acao = fluxo.passo(quadro, instante, partida=partida, cursor=cursor,
                                    no_onibus=onibus, hud_visivel=hud_visivel)
+                alvo_bau = None
+                if detector_bau is not None:
+                    if (partida and fluxo.inicio_partida is not None and not inventario
+                            and not pausado and not onibus):
+                        if instante >= proxima_busca_bau:
+                            alvo_bau = detector_bau.detectar(quadro)
+                            proxima_busca_bau = instante + 0.9
+                            if observador_bau.observar(alvo_bau, quadro.shape[0]) and alvo_bau:
+                                x, y = (round(ponto) for ponto in alvo_bau.centro)
+                                logger.info("bau_visivel caixa=%s score=%.3f",
+                                            alvo_bau.caixa, alvo_bau.score)
+                                eventos.put((
+                                    "acao",
+                                    f"Baú visível detectado perto de ({x}, {y}). Nenhuma entrada enviada.",
+                                ))
+                    else:
+                        proxima_busca_bau = 0.0
+                        observador_bau.observar(None, quadro.shape[0])
                 if not fluxo.config.anti_afk:
                     bloqueio = "desativado"
                 elif not pronto:
@@ -239,6 +266,7 @@ def monitorar(windows, fluxo, eventos, parar):
                     if not parar.is_set():
                         eventos.put(("acao", "Ação interrompida. Confira a janela e o foco do Fortnite."))
             else:
+                observador_bau.observar(None, 1)
                 fluxo.pausar()
                 estado = "Aguardando o Fortnite em primeiro plano"
                 assinatura = (False, "janela_ou_foco_indisponivel")
@@ -285,11 +313,12 @@ class Painel:
         self.total = tk.StringVar(janela, "0")
         self.opcoes = {nome: tk.BooleanVar(janela, getattr(self.config, nome)) for nome in CAMPOS[:-1]}
         self.minutos = tk.StringVar(janela, f"{self.config.minutos_partida:g}".replace(".", ","))
+        self.detector_bau = None
 
         janela.title(f"Auto Farm · {VERSAO}")
         janela.configure(bg=BG)
-        janela.minsize(640, 620)
-        janela.geometry("720x700")
+        janela.minsize(640, 660)
+        janela.geometry("720x740")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         self.estilo()
         self.montar()
@@ -377,6 +406,7 @@ class Painel:
             ("fallback_cor", "Usar alternativa de cor + OCR"),
             ("anti_afk", "Ativar movimento anti-AFK"),
             ("sair_por_tempo", "Retornar ao lobby por tempo"),
+            ("avisar_bau", "Avisar ao detectar baú visível"),
         )
         for indice, (nome, texto) in enumerate(opcoes):
             coluna, linha = indice % 2, indice // 2
@@ -385,12 +415,12 @@ class Painel:
             )
         ajustes.columnconfigure(0, weight=1)
         ajustes.columnconfigure(1, weight=1)
-        ttk.Separator(ajustes).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 12))
+        ttk.Separator(ajustes).grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 12))
         ttk.Label(ajustes, text="Duração máxima da partida", style="Card.TLabel").grid(
-            row=3, column=0, sticky="w",
+            row=4, column=0, sticky="w",
         )
         campo = ttk.Frame(ajustes, style="Card.TFrame")
-        campo.grid(row=3, column=1, sticky="e")
+        campo.grid(row=4, column=1, sticky="e")
         ttk.Entry(campo, textvariable=self.minutos, width=7, justify="center").pack(side="left")
         ttk.Label(campo, text="minutos  ·  1–60", style="CardInfo.TLabel").pack(side="left", padx=(9, 0))
 
@@ -399,6 +429,9 @@ class Painel:
         self.botao = ttk.Button(comandos, text="Iniciar", style="Primary.TButton", command=self.alternar)
         self.botao.pack(side="left")
         ttk.Button(comandos, text="Testar imagem", command=self.testar).pack(side="left", padx=(10, 8))
+        ttk.Button(comandos, text="Configurar baú", command=self.selecionar_referencia_bau).pack(
+            side="left", padx=(0, 8),
+        )
         ttk.Button(comandos, text="Abrir log", command=self.abrir_log).pack(side="left")
         ttk.Label(comandos, text="F6  ·  iniciar / pausar", style="Info.TLabel").pack(side="right")
 
@@ -526,6 +559,13 @@ class Painel:
         except ValueError:
             self.atividade.set("Informe um tempo de partida entre 1 e 60 minutos.")
             return
+        detector_bau = None
+        if config.avisar_bau:
+            try:
+                detector_bau = DetectorBau(CHEST_REFERENCE)
+            except (OSError, ValueError, cv2.error) as erro:
+                self.atividade.set(f"Configure uma referência de baú válida antes de iniciar: {erro}")
+                return
         try:
             salvar_config(config)
         except OSError:
@@ -541,8 +581,38 @@ class Painel:
         self.status.set("Iniciando")
         self.botao.configure(text="Pausar")
         self.parar = Event()
-        self.worker = Thread(target=monitorar, args=(self.windows, self.fluxo, self.eventos, self.parar))
+        self.worker = Thread(
+            target=monitorar,
+            args=(self.windows, self.fluxo, self.eventos, self.parar, detector_bau),
+        )
         self.worker.start()
+
+    def selecionar_referencia_bau(self):
+        caminho = filedialog.askopenfilename(
+            parent=self.janela, title="Selecionar um recorte de baú",
+            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp")],
+        )
+        if not caminho:
+            return
+        temporaria = CHEST_REFERENCE.with_suffix(".tmp")
+        try:
+            quadro = detectar_arquivo(caminho)
+            DetectorBau(imagem=quadro)
+            ok, codificada = cv2.imencode(".png", quadro)
+            if not ok:
+                raise ValueError("Não foi possível converter a imagem selecionada.")
+            CHEST_REFERENCE.parent.mkdir(parents=True, exist_ok=True)
+            temporaria.write_bytes(codificada.tobytes())
+            temporaria.replace(CHEST_REFERENCE)
+        except (OSError, ValueError, cv2.error) as erro:
+            mensagem = f"Referência de baú inválida: {erro}"
+            try:
+                temporaria.unlink(missing_ok=True)
+            except OSError as erro_limpeza:
+                mensagem += f" · não foi possível limpar o arquivo temporário: {erro_limpeza}"
+            self.atividade.set(mensagem)
+            return
+        self.atividade.set("Referência salva. Ative “Avisar ao detectar baú visível” para receber avisos.")
 
     def testar(self):
         caminho = filedialog.askopenfilename(parent=self.janela, title="Selecionar uma captura",
@@ -557,6 +627,8 @@ class Painel:
                 alvo = detector.detectar(quadro) or detector.procurar(
                     quadro, ("lobby_jogar", "lobby_pronto", "voltar_lobby", "resgatar"),
                 )
+            if alvo is None and not detector.dialogo_ambiguo and CHEST_REFERENCE.is_file():
+                alvo = DetectorBau(CHEST_REFERENCE).detectar(quadro)
         except (OSError, ValueError, cv2.error):
             self.atividade.set("Não foi possível testar a imagem. Confira o arquivo e os ajustes.")
             return
@@ -565,7 +637,10 @@ class Painel:
             cv2.rectangle(quadro, (x, y), (x + w, y + h), (85, 224, 183), max(2, quadro.shape[0] // 275))
             centro_x, centro_y = (round(ponto) for ponto in alvo.centro)
             cv2.drawMarker(quadro, (centro_x, centro_y), (0, 0, 255), cv2.MARKER_CROSS, 15, 2)
-            metodo = "cor/OCR" if alvo.metodo == "cor+OCR" else "template"
+            metodo = {
+                "cor+OCR": "cor/OCR",
+                "referencia": "referência de imagem",
+            }.get(alvo.metodo, "template")
             texto = (f"{ROTULOS.get(alvo.nome, alvo.nome)} · centro ({centro_x}, {centro_y})"
                      f" · {metodo} · score {alvo.score:.0%}")
         elif detector.dialogo_ambiguo:
@@ -727,6 +802,20 @@ def verificar_build():
     alvo = detector.detectar(cv2.cvtColor(np.asarray(botao), cv2.COLOR_RGB2BGR))
     if alvo is None or alvo.metodo != "cor+OCR" or not 650 < alvo.centro[0] < 790:
         raise RuntimeError("Falha na leitura por cor e texto de Jogar Novamente.")
+
+    referencia_bau = np.full((48, 56, 3), (38, 29, 24), dtype=np.uint8)
+    cv2.rectangle(referencia_bau, (5, 9), (50, 39), (10, 115, 218), -1)
+    cv2.rectangle(referencia_bau, (9, 14), (46, 34), (24, 177, 245), 2)
+    cv2.line(referencia_bau, (8, 24), (48, 24), (55, 215, 255), 3)
+    cv2.circle(referencia_bau, (28, 29), 3, (20, 45, 80), -1)
+    detector_bau = DetectorBau(imagem=referencia_bau)
+    quadro_bau = np.zeros((540, 960, 3), dtype=np.uint8)
+    quadro_bau[200:248, 400:456] = referencia_bau
+    alvo_bau = detector_bau.detectar(quadro_bau)
+    if alvo_bau is None or alvo_bau.metodo != "referencia":
+        raise RuntimeError("Falha na detecção de baú com a referência visual.")
+    if detector_bau.detectar(np.zeros_like(quadro_bau)) is not None:
+        raise RuntimeError("Uma tela vazia foi confundida com um baú.")
 
     sem_rotulo = Image.new("RGB", (960, 540), "#17263a")
     ImageDraw.Draw(sem_rotulo).rectangle((600, 220, 849, 269), fill="#ffff00")
