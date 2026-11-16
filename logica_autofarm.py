@@ -19,7 +19,6 @@ TEMPLATES = {
     "lobby_jogar": ("lobby_jogar.png", (0, 0.6, 0.4, 1), 0.5),
     "lobby_pronto": ("lobby_pronto.png", (0, 0.6, 0.4, 1), 0.5),
     "resgatar": ("resgatar.png", (0.25, 0.7, 0.75, 1), 0.5),
-    "confirmar_sair": ("confirmar_sair.png", (0, 0, 1, 1), 1.0),
     "espectador": ("espectador.png", (0.3, 0, 0.7, 0.12), 1.0),
     "inventario": ("inventario.png", (0.65, 0.82, 1, 1), 1.0),
     "aba_jogar": ("aba_jogar.png", (0, 0, 0.3, 0.12), 1.0),
@@ -39,8 +38,6 @@ class Config:
     fallback_cor: bool = True
     clicar_continuar: bool = True
     confirmacoes: int = 2
-    cooldown: float = 8.0
-    cooldown_continuar: float = 2.5
     timeout_lobby: float = 90.0
     sair_por_tempo: bool = True
     minutos_partida: float = 6.5
@@ -85,8 +82,10 @@ def _roi(imagem, limites):
 
 
 class Detector:
-    def __init__(self, pasta=None, config=Config()):
+    def __init__(self, pasta=None, config=Config(), leitor=None):
         self.config = config
+        self.leitor = leitor
+        self._ultimo_texto = None
         pasta = Path(pasta) if pasta else Path(__file__).with_name("templates")
         self.templates = {}
         self.ultima_escala = {}
@@ -250,16 +249,33 @@ class Detector:
 
     def detectar(self, quadro):
         """Prioridade da v59: Jogar Novamente, alternativa por cor, Continuar."""
-        alvo = self.procurar(quadro, ("jogar",))
-        if alvo:
-            return alvo
+        referencia = self.buscar_template(quadro, "jogar")
+        if referencia and referencia.score >= self.config.limiar:
+            return referencia
         if self.config.fallback_cor:
             alvo = self.buscar_por_cor(quadro)
-            if alvo and not self.fora_de_partida(quadro):
-                return alvo
+            if alvo and referencia and referencia.score >= 0.72:
+                cx, cy = referencia.centro
+                x, y, w, h = alvo.caixa
+                if (x <= cx <= x + w and y <= cy <= y + h and not self.fora_de_partida(quadro)
+                        and self.ler_contexto(quadro[y:y + h, x:x + w], "jogar")):
+                    return alvo
         if self.config.clicar_continuar:
             return self.procurar(quadro, ("continuar",))
         return None
+
+    def ler_contexto(self, quadro, tipo):
+        if self.leitor is None:
+            from texto_tela import Reconhecedor
+            self.leitor = Reconhecedor()
+        if self._ultimo_texto is not None:
+            imagem, contexto, alvo = self._ultimo_texto
+            if imagem is quadro and contexto == tipo:
+                return alvo
+        linha = self.leitor.ler(quadro, tipo)
+        alvo = Alvo(tipo, 1.0, linha.caixa, None, "texto") if linha else None
+        self._ultimo_texto = quadro, tipo, alvo
+        return alvo
 
 
 class Confirmacao:
@@ -308,10 +324,17 @@ class Fluxo:
         self._proxima_acao = 0.0
         self._prazo_lobby = None
         self._prazo_menu = None
+        self._prazo_fila = None
+        self._fila_contada = False
+        self._quadros_partida = 0
+        self._leituras_fila = 0
+        self._proximo_texto_fila = 0.0
+        self._sem_leitura_desde = None
+        self._aviso_leitura = False
         self._pendente = None
         self._tentativas = 0
-        self._ultimo_jogar = -math.inf
-        self._repeticoes_jogar = 0
+        self._quadros_sem_alvo = 0
+        self._bloqueado = None
         self._humor = None
         self._troca_humor = 0.0
         self._desvio = (0.0, 0.0, 0.0)
@@ -319,109 +342,160 @@ class Fluxo:
 
     def pausar(self):
         self.confirmacao.limpar()
-        self._prazo_menu = self._prazo_lobby = self._pendente = None
-        self._tentativas = 0
+        self._quadros_sem_alvo = self._quadros_partida = self._leituras_fila = 0
+        self._sem_leitura_desde = None
+        self._aviso_leitura = False
 
-    def _nova_partida(self, agora):
+    def _iniciar_partida(self, agora):
         self.inicio_partida = agora
-        self.partidas += 1
-        self._prazo_lobby = self._prazo_menu = None
         self._desvio = (0.0, 0.0, 0.0)
-        self._proxima_acao = agora + self.config.cooldown
+        self._sem_pulo_ate = 0.0
 
     def _procurar(self, quadro, *nomes):
         return self.detector.procurar(quadro, nomes)
 
-    def _clicar_e_verificar(self, alvo, agora):
+    def _alvo(self, quadro, nome):
+        if nome in ("jogar", "continuar"):
+            alvo = self.detector.detectar(quadro)
+            return alvo if alvo and alvo.nome == nome else None
+        if nome == "confirmar_sair":
+            return self.detector.ler_contexto(quadro, nome)
+        return self._procurar(quadro, nome)
+
+    def _clicar_e_verificar(self, alvo, agora, quadro):
+        if alvo.nome == self._bloqueado:
+            return None
+        if self._pendente is None and not self.confirmacao.observar(
+                alvo, quadro.shape[0], self.config.confirmacoes):
+            return None
         self._pendente = alvo.nome
         tentativa = self._tentativas
         self._tentativas += 1
-        self._proxima_acao = agora + 0.5
+        self._quadros_sem_alvo = 0
+        self._proxima_acao = agora + 1.5
         return Acao("clicar", alvo, tentativa=tentativa)
 
     def _verificar_clique(self, quadro, agora):
         nome = self._pendente
-        alvo = self._procurar(quadro, nome)
+        abriu_modal = nome == "voltar_lobby" and self.detector.ler_contexto(quadro, "confirmar_sair")
+        alvo = None if abriu_modal else self._alvo(quadro, nome)
         if alvo and self._tentativas < 3:
-            return self._clicar_e_verificar(alvo, agora)
+            return self._clicar_e_verificar(alvo, agora, quadro)
+        if not alvo:
+            self._quadros_sem_alvo += 1
+            if self._quadros_sem_alvo < 2:
+                return None
         self._pendente, self._tentativas = None, 0
         if alvo:
-            self._prazo_menu = self._prazo_lobby = None
-            self._proxima_acao = agora + 30
+            self._bloqueado = nome
             return Acao("clique_ignorado", alvo)
-        if nome in BOTOES_LOBBY:
-            self._nova_partida(agora)
+        if nome == "jogar" or nome in BOTOES_LOBBY:
+            self.inicio_partida = None
+            self._prazo_lobby = None
+            self._prazo_fila = agora + self.config.timeout_lobby
+            self._fila_contada = False
+            self._quadros_partida = self._leituras_fila = 0
+            self._proximo_texto_fila = agora
+            return Acao("aguardando_fila")
         elif nome == "voltar_lobby":
+            self.inicio_partida = None
             self._prazo_menu = None
             self._prazo_lobby = agora + self.config.timeout_lobby
         return Acao("clique_confirmado")
 
+    def _confirmar_fila(self, quadro, agora, partida):
+        if agora >= self._prazo_fila:
+            self._prazo_fila = None
+            return Acao("partida_nao_confirmada")
+        self._quadros_partida = self._quadros_partida + 1 if partida else 0
+        if self._quadros_partida >= 2:
+            self._prazo_fila = None
+            self._iniciar_partida(agora)
+            if not self._fila_contada:
+                self.partidas += 1
+            return Acao("partida_confirmada")
+        if self._fila_contada or partida or agora < self._proximo_texto_fila:
+            return None
+        self._proximo_texto_fila = agora + 1
+        fila = self.detector.ler_contexto(quadro, "fila")
+        self._leituras_fila = self._leituras_fila + 1 if fila else 0
+        if self._leituras_fila >= 2:
+            self.partidas += 1
+            self._fila_contada = True
+            return Acao("fila_confirmada")
+        return None
+
     def passo(self, quadro, agora, *, partida=False, foco=True, cursor=False, no_onibus=False):
         """Recebe imagem BGR e tempo monotônico em segundos. Retorna Acao ou None."""
         if not foco:
-            self.confirmacao.limpar()
+            self.pausar()
             return None
         if agora < self._proxima_acao:
             return None
         if self._pendente:
             return self._verificar_clique(quadro, agora)
+        if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
+            self._quadros_sem_alvo += 1
+            if self._quadros_sem_alvo >= 2:
+                self._bloqueado = None
+        elif self._bloqueado:
+            self._quadros_sem_alvo = 0
+        if self._prazo_fila is not None:
+            em_jogo = (partida or no_onibus) and not self.detector.fora_de_partida(quadro)
+            return self._confirmar_fila(quadro, agora, em_jogo)
         if self._prazo_menu is not None:
-            alvo = self._procurar(quadro, "voltar_lobby")
-            if alvo:
-                return self._clicar_e_verificar(alvo, agora)
-            alvo = self._procurar(quadro, "menu_aba")
-            if alvo:
-                self._proxima_acao = agora + 1.5
-                return Acao("clicar", alvo)
             if agora >= self._prazo_menu:
                 self._prazo_menu = None
                 self._proxima_acao = agora + 30
                 return Acao("menu_nao_encontrado")
+            alvo = self._procurar(quadro, "voltar_lobby") or self._procurar(quadro, "menu_aba")
+            if alvo:
+                return self._clicar_e_verificar(alvo, agora, quadro)
+            self.confirmacao.limpar()
             return None
 
+        if self._prazo_lobby is not None and agora < self._prazo_lobby:
+            alvo = self.detector.ler_contexto(quadro, "confirmar_sair")
+            if alvo:
+                return self._clicar_e_verificar(alvo, agora, quadro)
         alvo = self.detector.detectar(quadro)
         if alvo:
-            if not self.confirmacao.observar(alvo, quadro.shape[0], self.config.confirmacoes):
-                return None
-            if alvo.nome == "jogar":
-                if agora - self._ultimo_jogar <= self.config.cooldown + 20:
-                    self._repeticoes_jogar += 1
-                else:
-                    self._repeticoes_jogar = 0
-                self._ultimo_jogar = agora
-                self._nova_partida(agora)
-                return Acao("clicar", alvo, tentativa=self._repeticoes_jogar)
-            self._proxima_acao = agora + self.config.cooldown_continuar
-            return Acao("clicar", alvo)
+            self._sem_leitura_desde = None
+            self._aviso_leitura = False
+            return self._clicar_e_verificar(alvo, agora, quadro)
 
-        self.confirmacao.limpar()
         if self._prazo_lobby is not None and agora >= self._prazo_lobby:
             self._prazo_lobby = None
-            self._proxima_acao = agora + 30
             return Acao("lobby_nao_encontrado")
-        for nomes in (("confirmar_sair",), ("resgatar",), BOTOES_LOBBY):
-            alvo = self._procurar(quadro, *nomes)
-            if alvo:
-                if self._prazo_lobby is None:
-                    self._prazo_lobby = agora + self.config.timeout_lobby
-                return self._clicar_e_verificar(alvo, agora)
+        alvo = self._procurar(quadro, "resgatar") or self._procurar(quadro, *BOTOES_LOBBY)
+        if alvo:
+            self.inicio_partida = None
+            self._sem_leitura_desde = None
+            self._aviso_leitura = False
+            return self._clicar_e_verificar(alvo, agora, quadro)
         if self._prazo_lobby is not None or not partida:
             alvo = self._procurar(quadro, "aba_jogar")
             if alvo:
-                if self._prazo_lobby is None:
-                    self._prazo_lobby = agora + self.config.timeout_lobby
-                self._proxima_acao = agora + 1.5
-                return Acao("clicar", alvo)
+                return self._clicar_e_verificar(alvo, agora, quadro)
         if self._prazo_lobby is not None:
+            self.confirmacao.limpar()
             return None
-        if partida:
+        self.confirmacao.limpar()
+        if partida or no_onibus:
+            self._sem_leitura_desde = None
+            self._aviso_leitura = False
             if self.inicio_partida is None:
-                self.inicio_partida = agora
+                self._iniciar_partida(agora)
             if (self.config.sair_por_tempo
                     and agora - self.inicio_partida >= self.config.minutos_partida * 60):
                 self._prazo_menu = agora + 10
                 self._proxima_acao = agora + 1
                 return Acao("esc")
+        elif self._sem_leitura_desde is None:
+            self._sem_leitura_desde = agora
+        elif not self._aviso_leitura and agora - self._sem_leitura_desde >= self.config.timeout_lobby:
+            self._aviso_leitura = True
+            return Acao("tela_nao_reconhecida")
         if not (partida and self.config.anti_afk) or self.detector.fora_de_partida(quadro):
             return None
         if cursor and self._procurar(quadro, "inventario"):

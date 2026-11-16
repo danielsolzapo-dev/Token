@@ -15,7 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
-from logica_autofarm import Config, Detector, Fluxo
+from logica_autofarm import Config, Detector, Fluxo, TEMPLATES
 from versao import VERSAO
 from windows_game import Windows
 
@@ -61,8 +61,8 @@ def monitorar(windows, fluxo, eventos, parar):
     estado_anterior = acao_anterior = None
     try:
         detector = fluxo.detector
-        if "jogar" not in detector.templates:
-            raise ValueError("As imagens de referência não estão disponíveis.")
+        if faltando := TEMPLATES.keys() - detector.templates.keys():
+            raise ValueError("Imagens de referência ausentes: " + ", ".join(sorted(faltando)))
         while not parar.is_set():
             janela = windows.fortnite_em_foco()
             quadro = windows.capturar(janela) if janela else None
@@ -73,7 +73,7 @@ def monitorar(windows, fluxo, eventos, parar):
                     partida = False
                 estado = "Em partida" if partida else "Procurando botões"
                 cursor = windows.cursor_visivel()
-                onibus = partida and bool(detector.procurar(quadro, ("onibus",), 0.8))
+                onibus = bool(detector.procurar(quadro, ("onibus",), 0.8))
                 contagem = fluxo.partidas
                 acao = fluxo.passo(quadro, time.monotonic(), partida=partida, cursor=cursor, no_onibus=onibus)
                 if acao and windows.executar(janela, acao, parar):
@@ -82,10 +82,15 @@ def monitorar(windows, fluxo, eventos, parar):
                     else:
                         texto = {
                             "esc": "Esc enviado", "movimento": "Movimento anti-AFK",
-                            "clique_confirmado": "Clique confirmado pela tela",
+                            "clique_confirmado": "Botão saiu da tela",
                             "clique_ignorado": "Botão continua visível após três tentativas",
                             "menu_nao_encontrado": "Menu de saída não encontrado",
-                            "lobby_nao_encontrado": "Lobby não encontrado dentro do prazo",
+                            "lobby_nao_encontrado": "Lobby não encontrado. Confira se o jogo pede confirmação.",
+                            "aguardando_fila": "Aguardando confirmação da fila ou do início da partida",
+                            "fila_confirmada": "Fila confirmada. Aguardando o início da partida.",
+                            "partida_confirmada": "Partida reconhecida. Cronômetro iniciado.",
+                            "partida_nao_confirmada": "Nenhuma partida reconhecida dentro do prazo",
+                            "tela_nao_reconhecida": "Tela sem sinais conhecidos. Verifique o jogo ou use Testar imagem.",
                         }[acao.tipo]
                     if texto != acao_anterior:
                         eventos.put(("acao", texto))
@@ -93,8 +98,9 @@ def monitorar(windows, fluxo, eventos, parar):
                     if fluxo.partidas != contagem:
                         eventos.put(("total", fluxo.partidas))
                 elif acao:
-                    fluxo.partidas = contagem
                     fluxo.pausar()
+                    if not parar.is_set():
+                        eventos.put(("acao", "Ação interrompida. Confira a janela e o foco do Fortnite."))
             else:
                 fluxo.pausar()
                 estado = "Aguardando o Fortnite em primeiro plano"
@@ -240,7 +246,7 @@ class Painel:
             detector = Detector(config=self.ler_opcoes())
             alvo = detector.detectar(quadro) or detector.procurar(
                 quadro, ("lobby_jogar", "lobby_pronto", "voltar_lobby", "resgatar"),
-            )
+            ) or detector.ler_contexto(quadro, "confirmar_sair")
         except (OSError, ValueError, cv2.error):
             self.atividade.set("Não foi possível testar a imagem. Confira o arquivo e os ajustes.")
             return
@@ -300,6 +306,8 @@ class Painel:
 
 def verificar_build():
     detector = Detector()
+    if faltando := TEMPLATES.keys() - detector.templates.keys():
+        raise RuntimeError("Imagens ausentes no pacote: " + ", ".join(sorted(faltando)))
     for nome, (x, y) in (("jogar", (650, 210)), ("continuar", (650, 448)), ("lobby_jogar", (20, 420))):
         template = detector.templates[nome]
         h, w = template.shape[:2]
@@ -309,12 +317,22 @@ def verificar_build():
         if not alvo or alvo.caixa != (x, y, w, h):
             raise RuntimeError(f"Falha ao detectar {nome} no pacote.")
     fluxo = Fluxo(detector)
-    if fluxo.passo(quadro, 0).alvo.nome != "lobby_jogar":
+    if fluxo.passo(quadro, 0) is not None or fluxo.passo(quadro.copy(), 0.3).alvo.nome != "lobby_jogar":
         raise RuntimeError("Falha na integração do fluxo de lobby.")
     hud = np.zeros((540, 960, 3), dtype=np.uint8)
     hud[475:486, 32:105] = (0, 215, 145)
     if not detector.em_partida(hud) or detector.em_partida(np.zeros_like(hud)):
         raise RuntimeError("Falha na leitura da barra de vida.")
+    from PIL import ImageDraw, ImageFont
+    modal = Image.new("RGB", (960, 540), "#17263a")
+    fonte = ImageFont.truetype(str(Path(os.environ["WINDIR"]) / "Fonts" / "arialbd.ttf"), 34)
+    desenho = ImageDraw.Draw(modal)
+    desenho.text((480, 205), "VOLTAR AO LOBBY?", font=fonte, anchor="mm")
+    desenho.text((360, 332), "CONFIRMAR", font=fonte, anchor="mm")
+    desenho.text((610, 332), "CANCELAR", font=fonte, anchor="mm")
+    confirmacao = detector.ler_contexto(cv2.cvtColor(np.asarray(modal), cv2.COLOR_RGB2BGR), "confirmar_sair")
+    if confirmacao is None or not 300 < confirmacao.centro[0] < 420:
+        raise RuntimeError("Falha na leitura do diálogo de saída.")
     windows = Windows()
     janela = tk.Tk()
     janela.withdraw()

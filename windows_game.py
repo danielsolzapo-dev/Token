@@ -70,6 +70,7 @@ class Windows:
         api.SendInput.restype = wintypes.UINT
         api.mouse_event.argtypes = [wintypes.DWORD, wintypes.LONG, wintypes.LONG,
                                     wintypes.DWORD, ctypes.c_size_t]
+        api.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
         self.kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
         self.kernel.OpenProcess.restype = wintypes.HANDLE
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -95,12 +96,16 @@ class Windows:
                 return None
         finally:
             self.kernel.CloseHandle(handle)
+        area = self._area(hwnd)
+        return Janela(hwnd, area) if area else None
+
+    def _area(self, hwnd):
         rect, origem = wintypes.RECT(), wintypes.POINT()
         if (not self.user.GetClientRect(hwnd, ctypes.byref(rect))
                 or not self.user.ClientToScreen(hwnd, ctypes.byref(origem))
                 or rect.right < 64 or rect.bottom < 64):
             return None
-        return Janela(hwnd, (origem.x, origem.y, origem.x + rect.right, origem.y + rect.bottom))
+        return origem.x, origem.y, origem.x + rect.right, origem.y + rect.bottom
 
     def f6(self):
         return bool(self.user.GetAsyncKeyState(F6) & 0x8000)
@@ -115,7 +120,8 @@ class Windows:
         return cv2.cvtColor(np.asarray(imagem), cv2.COLOR_RGB2BGR)
 
     def disponivel(self, janela, parar):
-        return not parar.is_set() and self.user.GetForegroundWindow() == janela.hwnd
+        return (not parar.is_set() and self._area(janela.hwnd) == janela.area
+                and not parar.is_set() and self.user.GetForegroundWindow() == janela.hwnd)
 
     def _enviar(self, evento):
         if self.user.SendInput(1, ctypes.byref(evento), ctypes.sizeof(Entrada)) != 1:
@@ -163,6 +169,7 @@ class Windows:
                 try:
                     self._tecla(scan, soltando=True)
                 except OSError as erro:
+                    self.user.keybd_event(0, scan, 8 | 2, 0)
                     falha = erro
             if falha is not None:
                 raise falha
@@ -197,7 +204,9 @@ class Windows:
             x, y = esquerda + round(x), topo + round(y)
             if not (esquerda <= x < direita and topo <= y < base):
                 return False
-            if self.fortnite_em_foco() != janela or not self.user.SetCursorPos(x, y):
+            if self.fortnite_em_foco() != janela or not self.disponivel(janela, parar):
+                return False
+            if not self.user.SetCursorPos(x, y):
                 return False
             if not self._esperar(janela, parar, 0.10):
                 return False
