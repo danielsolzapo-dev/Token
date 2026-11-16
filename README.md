@@ -12,9 +12,16 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 
 O app procura **Jogar Novamente**, **Continuar** e os botões do lobby. A detecção usa imagens de referência em múltiplas escalas; a alternativa amarelo+OCR para **Jogar Novamente** só aceita o rótulo dentro do controle. A leitura em português ou inglês identifica fila e diálogo de saída, e não confirma quando há mais de um diálogo plausível.
 
-O contador avança uma vez por fila reconhecida. O cronômetro e o movimento anti-AFK só começam depois de um período estável sem HUD/ônibus e do reconhecimento estável do HUD de uma partida nova; um HUD antigo, uma falha isolada de leitura ou um ônibus já visível não confirmam uma nova partida. Um botão de lobby reaparecendo não reinicia a fila sozinho: depois do timeout, recomece com **Iniciar/F6** ou aguarde o reconhecimento explícito de cancelamento.
+O contador avança uma vez por fila reconhecida. Depois que o app tenta entrar na fila, ele aguarda uma transição de HUD antes de iniciar o cronômetro e liberar o movimento. Se você abrir o painel durante uma partida em andamento, o HUD estável libera o anti-AFK com o cronômetro de saída desarmado. Um botão de lobby reaparecendo não reinicia a fila sozinho: depois do timeout, recomece com **Iniciar/F6** ou aguarde o reconhecimento explícito de cancelamento.
 
-O anti-AFK fica bloqueado sem uma partida recém-confirmada, no ônibus, inventário, espectador, tela desconhecida, pausa ou perda de foco. A janela e suas coordenadas são validadas antes de cada ação e entre segmentos de entrada. O Windows recebe entradas globais; essas verificações reduzem o risco de enviar comandos fora do jogo, mas não eliminam a corrida entre a última validação e o envio.
+O anti-AFK fica bloqueado no ônibus, no inventário, em modo espectador, com HUD indisponível ou durante pausa ou perda de foco. A janela e suas coordenadas são validadas antes de cada ação e entre segmentos de entrada. O Windows recebe entradas globais; essas verificações reduzem o risco de enviar comandos fora do jogo, mas não eliminam a corrida entre a última validação e o envio.
+
+## Enviar um diagnóstico
+
+1. Reproduza a falha e pressione **F7**. Isso marca o horário no registro da sessão.
+2. Clique em **Copiar diagnóstico** no painel e cole o texto ao relatar a falha.
+
+O registro fica em `%LOCALAPPDATA%\AutoFarmToken\diagnostico.log`, com até duas cópias rotativas. Ele registra estados do jogo, decisões e os comandos que o app tentou enviar. O resultado `enviada` indica que a rotina de entrada do Windows terminou; a resposta no Fortnite precisa ser observada no jogo. O app mantém os registros localmente, sem capturas de tela ou histórico das teclas que você digitou.
 
 Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção depende da resolução, escala e idioma da interface do jogo e pode precisar de ajustes após atualizações do Fortnite. Confirme se automação de entradas é permitida pelas regras do jogo; não use o aplicativo se isso violar as regras ou políticas aplicáveis.
 

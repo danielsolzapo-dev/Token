@@ -71,12 +71,24 @@ class FluxoTest(unittest.TestCase):
                 self.assertEqual(self.fluxo.partidas, 0)
                 self.assertIsNone(self.fluxo.inicio_partida)
 
-    def test_hud_ao_abrir_app_nao_inicia_cronometro_ou_anti_afk(self):
-                self.habilitar_movimento()
-                self.fluxo.inicio_partida = None
-                for instante in (0, 0.3, 0.6, 1.0, 1.5):
-                    self.assertIsNone(self.passo(instante, partida=True))
-                self.assertIsNone(self.fluxo.inicio_partida)
+    def test_partida_ja_em_andamento_permite_andar_sem_iniciar_cronometro(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
+        self.assertIsNone(self.passo(0, partida=True))
+        self.assertIsNone(self.passo(0.3, partida=True))
+        self.assertEqual(self.passo(0.6, partida=True).passos, (("teclas", (17,), 0.8),))
+        self.assertIsNone(self.fluxo.inicio_partida)
+        self.assertEqual(self.fluxo.partidas, 0)
+
+    def test_anti_afk_aguarda_transicao_apos_clique_de_fila(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
+        self.iniciar_clique("jogar")
+        self.assertIsNone(self.passo(2, partida=True))
+        self.assertEqual(self.passo(2.2, partida=True).tipo, "aguardando_fila")
+        self.assertIsNone(self.passo(2.5, partida=True))
+        self.assertEqual(self.fluxo.motivo_anti_afk, "aguardando_transicao_da_fila")
+        self.assertEqual(self.passo(11, partida=True).tipo, "partida_nao_confirmada")
+        self.assertIsNone(self.passo(11.5, partida=True))
+        self.assertEqual(self.fluxo.motivo_anti_afk, "aguardando_transicao_da_fila")
 
     def test_onibus_antigo_e_falha_isolada_de_leitura_nao_confirmam_partida(self):
                 self.assertIsNone(self.passo(0, "jogar", no_onibus=True))

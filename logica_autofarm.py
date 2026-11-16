@@ -350,6 +350,8 @@ class Fluxo:
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
         self._proxima_caminhada = 0.0
+        self._movimento_exige_transicao = False
+        self.motivo_anti_afk = "aguardando_hud"
 
     def pausar(self):
         self.confirmacao.limpar()
@@ -369,6 +371,7 @@ class Fluxo:
         self._quadros_hud_afk = 0
         self._proxima_caminhada = agora
         self._inicio_hud_novo = None
+        self._movimento_exige_transicao = False
 
     def rearmar_fila(self):
         """Permite uma nova tentativa somente após ação explícita de iniciar."""
@@ -407,6 +410,7 @@ class Fluxo:
         self._quadros_sem_alvo = 0
         if self._pendente in BOTOES_FILA:
             self._fila_bloqueada = True
+            self._movimento_exige_transicao = True
             self._botoes_fila_clicados.add(self._pendente)
             self._transicao_hud = False
             self._quadros_sem_hud = 0
@@ -521,15 +525,21 @@ class Fluxo:
     def passo(self, quadro, agora, *, partida=False, foco=True, cursor=False, no_onibus=False,
               hud_visivel=None):
         """Recebe imagem BGR e tempo monotônico em segundos. Retorna Acao ou None."""
+        self.motivo_anti_afk = "outro_fluxo_ativo" if self.config.anti_afk else "desativado"
         if not foco:
+            self.motivo_anti_afk = "fortnite_sem_foco"
             self.pausar()
             return None
         if agora < self._proxima_acao:
+            self.motivo_anti_afk = "intervalo_entre_acoes"
             return None
-        if not partida:
+        if not partida or no_onibus:
             self._quadros_hud_afk = 0
+            if self._prazo_fila is None:
+                self._inicio_hud_novo = None
         hud_visivel = partida if hud_visivel is None else hud_visivel
         if self._pendente:
+            self.motivo_anti_afk = "verificando_clique"
             return self._verificar_clique(quadro, agora, hud_visivel, no_onibus)
         if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
             self._quadros_sem_alvo += 1
@@ -538,10 +548,12 @@ class Fluxo:
         elif self._bloqueado:
             self._quadros_sem_alvo = 0
         if self._prazo_fila is not None:
+            self.motivo_anti_afk = "aguardando_transicao_da_fila"
             em_jogo = partida
             return self._confirmar_fila(quadro, agora, em_jogo, hud_visivel, no_onibus)
         self._botoes_fila_clicados.clear()
         if self._prazo_menu is not None:
+            self.motivo_anti_afk = "aguardando_menu_de_saida"
             if agora >= self._prazo_menu:
                 self._prazo_menu = None
                 self._proxima_acao = agora + 30
@@ -581,12 +593,14 @@ class Fluxo:
             if alvo:
                 return self._clicar_e_verificar(alvo, quadro)
         if self._prazo_lobby is not None:
+            self.motivo_anti_afk = "aguardando_lobby"
             self.confirmacao.limpar()
             return None
         self.confirmacao.limpar()
         inventario_aberto = bool(partida and self._procurar(quadro, "inventario"))
         if inventario_aberto:
             self._quadros_hud_afk = 0
+            self._inicio_hud_novo = None
         if partida:
             self._sem_leitura_desde = None
             self._aviso_leitura = False
@@ -601,19 +615,33 @@ class Fluxo:
         elif not self._aviso_leitura and agora - self._sem_leitura_desde >= self.config.timeout_lobby:
             self._aviso_leitura = True
             return Acao("tela_nao_reconhecida")
-        if not (self.inicio_partida is not None and partida and not no_onibus
-                and self.config.anti_afk):
+        if not self.config.anti_afk:
+            self.motivo_anti_afk = "desativado"
+            return None
+        if not partida or no_onibus:
+            self.motivo_anti_afk = "aviso_de_onibus" if no_onibus else "hud_indisponivel"
+            return None
+        if self._movimento_exige_transicao:
+            self.motivo_anti_afk = "aguardando_transicao_da_fila"
             return None
         # O ícone do menu isolado também pode aparecer junto do HUD de jogo.
         # Exige o controle de saída, com limiar maior se não houver cursor.
         if self.detector.procurar(quadro, ("voltar_lobby",), limiar=None if cursor else 0.92):
             self._quadros_hud_afk = 0
+            self._inicio_hud_novo = None
+            self.motivo_anti_afk = "menu_de_saida"
             return Acao("movimento_menu")
         if inventario_aberto:
+            self.motivo_anti_afk = "inventario_aberto"
             return None
         self._quadros_hud_afk += 1
-        if self._quadros_hud_afk < 2:
+        if self.inicio_partida is None and self._inicio_hud_novo is None:
+            self._inicio_hud_novo = agora
+        if (self._quadros_hud_afk < 2 or
+                (self.inicio_partida is None and agora - self._inicio_hud_novo < 0.35)):
+            self.motivo_anti_afk = "confirmando_hud"
             return None
+        self.motivo_anti_afk = "movimento_planejado"
         if agora >= self._proxima_caminhada:
             x, y, rumo = self._desvio
             tecla = "S" if x * math.sin(math.radians(rumo)) + y * math.cos(math.radians(rumo)) > 1 else "W"

@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from diagnostico import Diagnostico
 from logica_autofarm import Config, Detector, Fluxo, TECLAS, TEMPLATES
 from versao import VERSAO
 from windows_game import Windows
@@ -26,6 +27,7 @@ TEXTO = "#f0f3f9"
 MUTED = "#aab7cb"
 ACENTO = "#afd45e"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
+ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "minutos_partida")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
@@ -57,31 +59,68 @@ def salvar_config(config):
     provisoria.replace(CONFIG)
 
 
-def monitorar(windows, fluxo, eventos, parar):
+def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     estado_anterior = acao_anterior = None
     dialogo_ambiguo_anterior = False
+    leituras_anteriores = None
+    proximo_registro = 0.0
+    ultimo_tipo = None
+    ordem = 0
+    etapa = "iniciar"
+    acao = None
     try:
+        if diagnostico:
+            diagnostico.registrar("sessao_iniciada", versao=VERSAO, anti_afk=fluxo.config.anti_afk,
+                                  saida_por_tempo=fluxo.config.sair_por_tempo)
         detector = fluxo.detector
         if faltando := TEMPLATES.keys() - detector.templates.keys():
             raise ValueError("Imagens de referência ausentes: " + ", ".join(sorted(faltando)))
         while not parar.is_set():
+            acao = None
+            etapa = "capturar"
             janela = windows.fortnite_em_foco()
             quadro = windows.capturar(janela) if janela else None
             pronto = janela is not None and windows.disponivel(janela, parar)
             if pronto:
+                etapa = "detectar"
                 hud_visivel = partida = detector.em_partida(quadro)
-                if partida and detector.procurar(quadro, ("espectador", "reinicializando"), 0.8):
+                bloqueio_hud = detector.procurar(quadro, ("espectador", "reinicializando"), 0.8) if partida else None
+                if bloqueio_hud:
                     partida = False
                 cursor = windows.cursor_visivel()
-                onibus = bool(detector.procurar(quadro, ("onibus",), 0.8))
+                alvo_onibus = detector.procurar(quadro, ("onibus",), 0.8)
+                onibus = bool(alvo_onibus)
                 contagem = fluxo.partidas
-                acao = fluxo.passo(quadro, time.monotonic(), partida=partida, cursor=cursor,
+                agora = time.monotonic()
+                etapa = "decidir"
+                acao = fluxo.passo(quadro, agora, partida=partida, cursor=cursor,
                                    no_onibus=onibus, hud_visivel=hud_visivel)
+                leituras = (True, hud_visivel, partida, cursor, onibus, fluxo.motivo_anti_afk)
+                if diagnostico and (leituras != leituras_anteriores or agora >= proximo_registro):
+                    diagnostico.registrar("leitura", foco=True, hud=hud_visivel, partida=partida,
+                                          cursor=cursor, onibus=onibus, anti_afk=fluxo.motivo_anti_afk,
+                                          bloqueio_hud=bloqueio_hud.nome if bloqueio_hud else None,
+                                          score_onibus=round(alvo_onibus.score, 3) if alvo_onibus else None,
+                                          resolucao=[quadro.shape[1], quadro.shape[0]])
+                    leituras_anteriores, proximo_registro = leituras, agora + 10
                 if detector.dialogo_ambiguo and not dialogo_ambiguo_anterior:
                     eventos.put(("acao", "Confirmação de saída ambígua. Confira o jogo."))
                 dialogo_ambiguo_anterior = detector.dialogo_ambiguo
-                estado = "Em partida" if partida and fluxo.inicio_partida is not None else "Procurando botões"
-                executada = acao is not None and windows.executar(janela, acao, parar)
+                estado = "Em partida" if partida else "Procurando botões"
+                tem_entrada = acao is not None and acao.tipo in ("clicar", "esc", "movimento")
+                if diagnostico and acao and (tem_entrada or acao.tipo != ultimo_tipo):
+                    ordem += 1
+                    diagnostico.registrar("acao", id=ordem, tipo=acao.tipo,
+                                          alvo=acao.alvo.nome if acao.alvo else None,
+                                          tentativa=acao.tentativa + 1 if acao.tipo == "clicar" else None,
+                                          passos=acao.passos)
+                ultimo_tipo = acao.tipo if acao else None
+                etapa = "enviar_entrada"
+                executada = acao is not None and (not tem_entrada or windows.executar(janela, acao, parar))
+                if diagnostico and tem_entrada:
+                    motivo = None if executada else windows.motivo_interrupcao(janela, parar)
+                    diagnostico.registrar("resultado_entrada", id=ordem,
+                                          resultado="enviada" if executada else "interrompida", motivo=motivo)
                 if acao and acao.tipo == "clicar":
                     fluxo.registrar_clique(acao, executada, time.monotonic(), no_onibus=onibus)
                 if fluxo.partidas != contagem:
@@ -120,13 +159,23 @@ def monitorar(windows, fluxo, eventos, parar):
             else:
                 fluxo.pausar()
                 estado = "Aguardando o Fortnite em primeiro plano"
+                if diagnostico and leituras_anteriores != (False,):
+                    motivo = windows.motivo_interrupcao(janela, parar) if janela else "fortnite_sem_foco"
+                    diagnostico.registrar("leitura", foco=False, anti_afk=motivo)
+                    leituras_anteriores = (False,)
             if estado != estado_anterior:
                 eventos.put(("estado", estado))
                 estado_anterior = estado
             parar.wait(0.18 if pronto else 0.3)
-    except (OSError, ValueError, cv2.error) as erro:
+    except Exception as erro:
+        if diagnostico:
+            diagnostico.registrar("erro", etapa=etapa, tipo=type(erro).__name__,
+                                  codigo=getattr(erro, "winerror", None),
+                                  id=ordem if acao else None, acao=acao.tipo if acao else None)
         eventos.put(("erro", str(erro)))
     finally:
+        if diagnostico:
+            diagnostico.registrar("sessao_encerrada", pausada=parar.is_set())
         fluxo.pausar()
         eventos.put(("fim", None))
 
@@ -139,13 +188,15 @@ def detectar_arquivo(caminho):
 
 
 class Painel:
-    def __init__(self, janela, windows, config=None):
+    def __init__(self, janela, windows, config=None, diagnostico=None):
         self.janela, self.windows = janela, windows
+        self.diagnostico = diagnostico
         self.config = config if config is not None else carregar_config()
         self.fluxo = None
         self.eventos = SimpleQueue()
         self.worker = self.parar = None
         self.f6_anterior = self.fechando = False
+        self.f7_anterior = False
         self.status = tk.StringVar(janela, "Pausado")
         self.atividade = tk.StringVar(janela, "A sessão começa quando você clicar em Iniciar.")
         self.total = tk.StringVar(janela, "0")
@@ -215,7 +266,23 @@ class Painel:
         self.botao = ttk.Button(comandos, text="Iniciar", style="Start.TButton", command=self.alternar)
         self.botao.pack(side="left")
         ttk.Button(comandos, text="Testar imagem", command=self.testar).pack(side="left", padx=8)
+        ttk.Button(comandos, text="Copiar diagnóstico", command=self.copiar_diagnostico).pack(side="left")
         ttk.Label(comandos, text="F6 inicia ou pausa", style="Info.TLabel").pack(side="right")
+        ttk.Label(painel, text="F7 marca uma falha no diagnóstico durante a sessão.",
+                  style="Info.TLabel").pack(anchor="w", pady=(8, 0))
+
+    def copiar_diagnostico(self):
+        try:
+            texto = self.diagnostico.texto() if self.diagnostico else ""
+        except OSError:
+            self.atividade.set("Não foi possível ler o diagnóstico local.")
+            return
+        if not texto:
+            self.atividade.set("Inicie uma sessão para gerar o diagnóstico.")
+            return
+        self.janela.clipboard_clear()
+        self.janela.clipboard_append(texto)
+        self.atividade.set("Diagnóstico copiado. Cole o texto na conversa em que for relatar a falha.")
 
     def ler_opcoes(self):
         minutos = float(self.minutos.get().replace(",", "."))
@@ -250,7 +317,7 @@ class Painel:
         self.status.set("Iniciando")
         self.botao.configure(text="Pausar")
         self.parar = Event()
-        self.worker = Thread(target=monitorar, args=(self.windows, self.fluxo, self.eventos, self.parar))
+        self.worker = Thread(target=monitorar, args=(self.windows, self.fluxo, self.eventos, self.parar, self.diagnostico))
         self.worker.start()
 
     def testar(self):
@@ -302,6 +369,11 @@ class Painel:
         if not self.fechando and f6 and not self.f6_anterior and "disabled" not in self.botao.state():
             self.alternar()
         self.f6_anterior = f6
+        if self.diagnostico:
+            f7 = self.windows.f7()
+            if f7 and not self.f7_anterior and self.worker is not None and self.worker.is_alive():
+                self.diagnostico.registrar("falha_marcada_pelo_usuario", estado=self.status.get())
+            self.f7_anterior = f7
         while True:
             try:
                 evento, valor = self.eventos.get_nowait()
@@ -428,8 +500,18 @@ def main():
         return
     windows = Windows()
     janela = tk.Tk()
-    Painel(janela, windows)
-    janela.mainloop()
+    try:
+        diagnostico = Diagnostico(ARQUIVO_LOG)
+    except OSError:
+        diagnostico = None
+    painel = Painel(janela, windows, diagnostico=diagnostico)
+    if diagnostico is None:
+        painel.atividade.set("O diagnóstico local não pôde ser criado.")
+    try:
+        janela.mainloop()
+    finally:
+        if diagnostico:
+            diagnostico.fechar()
 
 
 if __name__ == "__main__":

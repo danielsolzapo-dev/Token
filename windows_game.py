@@ -11,6 +11,7 @@ from PIL import ImageGrab
 
 
 F6 = 0x75
+F7 = 0x76
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,9 @@ class Windows:
     def f6(self):
         return bool(self.user.GetAsyncKeyState(F6) & 0x8000)
 
+    def f7(self):
+        return bool(self.user.GetAsyncKeyState(F7) & 0x8000)
+
     def cursor_visivel(self):
         cursor = Cursor(tamanho=ctypes.sizeof(Cursor))
         return bool(self.user.GetCursorInfo(ctypes.byref(cursor)) and cursor.flags & 1)
@@ -125,12 +129,23 @@ class Windows:
         return (not parar.is_set() and self._area(janela.hwnd) == janela.area
                 and not parar.is_set() and self.user.GetForegroundWindow() == janela.hwnd)
 
+    def motivo_interrupcao(self, janela, parar):
+        if parar.is_set():
+            return "painel_pausado"
+        if self.user.GetForegroundWindow() != janela.hwnd:
+            return "fortnite_perdeu_foco"
+        if self._area(janela.hwnd) != janela.area:
+            return "area_da_janela_mudou"
+        return "entrada_interrompida"
+
     def _enviar(self, evento):
         ctypes.set_last_error(0)
         if self.user.SendInput(1, ctypes.byref(evento), ctypes.sizeof(Entrada)) != 1:
             erro = ctypes.get_last_error()
             detalhe = f" (código {erro})" if erro else ""
-            raise OSError(f"O Windows recusou o comando de entrada{detalhe}.")
+            excecao = OSError(f"O Windows recusou o comando de entrada{detalhe}.")
+            excecao.winerror = erro or None
+            raise excecao
 
     def _tecla(self, scan, soltando=False):
         self._enviar(Entrada(1, Dados(tecla=Tecla(scan=scan, flags=8 | (2 if soltando else 0)))))
