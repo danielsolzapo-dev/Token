@@ -47,7 +47,9 @@ class Cursor(ctypes.Structure):
 
 
 class Windows:
-    def __init__(self):
+    def __init__(self, *, relogio=None, esperar=None):
+        self.relogio = relogio or time.monotonic
+        self.esperar_evento = esperar or (lambda parar, duracao: parar.wait(duracao))
         self.user = ctypes.WinDLL("user32", use_last_error=True)
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         api = self.user
@@ -137,12 +139,12 @@ class Windows:
         self._enviar(Entrada(0, Dados(mouse=Mouse(dx=dx, dy=dy, flags=flags))))
 
     def _esperar(self, janela, parar, duracao):
-        fim = time.monotonic() + duracao
+        fim = self.relogio() + duracao
         while self.disponivel(janela, parar):
-            restante = fim - time.monotonic()
+            restante = fim - self.relogio()
             if restante <= 0:
                 return True
-            parar.wait(min(0.04, restante))
+            self.esperar_evento(parar, min(0.04, restante))
         return False
 
     def _pressionar(self, janela, parar, teclas, duracao, dx=0, dy=0):
@@ -172,8 +174,11 @@ class Windows:
                 try:
                     self._tecla(scan, soltando=True)
                 except OSError as erro:
-                    self.user.keybd_event(0, scan, 8 | 2, 0)
-                    falha = erro
+                    falha = falha or erro
+                    try:
+                        self.user.keybd_event(0, scan, 8 | 2, 0)
+                    except OSError as erro_fallback:
+                        falha = falha or erro_fallback
             if falha is not None:
                 raise falha
 

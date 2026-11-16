@@ -1,4 +1,4 @@
-"""Reconstrução em Python da lógica principal do AutoFarmFN v59."""
+"""State machine and screen detector for the independent Auto Farm app."""
 
 from dataclasses import dataclass
 import math
@@ -223,7 +223,7 @@ class Detector:
             if (area > maior_area and cv2.contourArea(contorno) / area >= 0.85
                     and amarelo >= 0.5 and 0.03 <= escuro <= 0.45):
                 caixa = tuple(round(v / fator) for v in (x + x0, y + y0, w, h))
-                melhor, maior_area = Alvo("jogar", amarelo, caixa, None, "cor"), area
+                melhor, maior_area = Alvo("jogar", amarelo, caixa, None, "cor+OCR"), area
         return melhor
 
     def fora_de_partida(self, quadro):
@@ -331,8 +331,9 @@ class Fluxo:
         self._quadros_partida = 0
         self._quadros_sem_hud = 0
         self._transicao_hud = False
-        self._aguarda_hud_novo = False
-        self._onibus_no_clique = False
+        self._inicio_sem_sinais = None
+        self._inicio_hud_novo = None
+        self._fila_bloqueada = False
         self._botoes_fila_clicados = set()
         self._leituras_fila = 0
         self._leituras_cancelamento = 0
@@ -354,6 +355,8 @@ class Fluxo:
         self.confirmacao.limpar()
         self._quadros_sem_alvo = self._quadros_partida = self._leituras_fila = 0
         self._quadros_sem_hud = 0
+        self._transicao_hud = False
+        self._inicio_sem_sinais = self._inicio_hud_novo = None
         self._leituras_cancelamento = 0
         self._sem_leitura_desde = None
         self._aviso_leitura = False
@@ -361,11 +364,18 @@ class Fluxo:
 
     def _iniciar_partida(self, agora):
         self.inicio_partida = agora
-        self._aguarda_hud_novo = False
         self._desvio = (0.0, 0.0, 0.0)
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
         self._proxima_caminhada = agora
+        self._inicio_hud_novo = None
+
+    def rearmar_fila(self):
+        """Permite uma nova tentativa somente após ação explícita de iniciar."""
+        if self._prazo_fila is None or self._fila_expirada:
+            if self._fila_expirada:
+                self._encerrar_espera_fila()
+            self._fila_bloqueada = False
 
     def _procurar(self, quadro, *nomes):
         return self.detector.procurar(quadro, nomes)
@@ -396,15 +406,25 @@ class Fluxo:
         self._tentativas += 1
         self._quadros_sem_alvo = 0
         if self._pendente in BOTOES_FILA:
+            self._fila_bloqueada = True
             self._botoes_fila_clicados.add(self._pendente)
             self._transicao_hud = False
             self._quadros_sem_hud = 0
-            self._onibus_no_clique = no_onibus
+            self._inicio_sem_sinais = self._inicio_hud_novo = None
+            self._quadros_partida = 0
 
-    def _observar_transicao(self, hud_visivel, no_onibus):
+    def _observar_transicao(self, hud_visivel, no_onibus, agora):
         if not self._transicao_hud:
-            self._quadros_sem_hud = 0 if hud_visivel or no_onibus else self._quadros_sem_hud + 1
-            self._transicao_hud = self._quadros_sem_hud >= 2
+            if hud_visivel or no_onibus:
+                self._quadros_sem_hud = 0
+                self._inicio_sem_sinais = None
+                return
+            if self._inicio_sem_sinais is None:
+                self._inicio_sem_sinais = agora
+            self._quadros_sem_hud += 1
+            self._transicao_hud = (
+                self._quadros_sem_hud >= 4 and agora - self._inicio_sem_sinais >= 0.65
+            )
 
     def _verificar_clique(self, quadro, agora, hud_visivel, no_onibus):
         nome = self._pendente
@@ -417,7 +437,7 @@ class Fluxo:
             return self._clicar_e_verificar(alvo, quadro)
         if not alvo:
             if nome in BOTOES_FILA:
-                self._observar_transicao(hud_visivel, no_onibus)
+                self._observar_transicao(hud_visivel, no_onibus, agora)
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo < 2:
                 return None
@@ -428,7 +448,6 @@ class Fluxo:
             return Acao("clique_ignorado", alvo)
         if nome in BOTOES_FILA:
             self.inicio_partida = None
-            self._aguarda_hud_novo = True
             self._prazo_lobby = None
             self._prazo_fila = agora + self.config.timeout_lobby
             self._fila_contada = False
@@ -456,13 +475,20 @@ class Fluxo:
                 return Acao("partida_nao_confirmada")
             self._fila_expirada = True
             return Acao("fila_sem_partida")
-        self._observar_transicao(hud_visivel, no_onibus)
-        jogo_novo = partida and (self._transicao_hud or (no_onibus and not self._onibus_no_clique))
+        self._observar_transicao(hud_visivel, no_onibus, agora)
+        jogo_novo = partida and self._transicao_hud
         self._quadros_partida = self._quadros_partida + 1 if jogo_novo else 0
-        if self._quadros_partida >= 2:
+        if jogo_novo:
+            if self._inicio_hud_novo is None:
+                self._inicio_hud_novo = agora
+        else:
+            self._inicio_hud_novo = None
+        if (self._quadros_partida >= 3 and self._inicio_hud_novo is not None
+                and agora - self._inicio_hud_novo >= 0.35):
             self._iniciar_partida(agora)
             if not self._fila_contada:
                 self.partidas += 1
+            self._fila_bloqueada = False
             self._encerrar_espera_fila()
             return Acao("partida_confirmada")
         if self._fila_contada:
@@ -472,6 +498,7 @@ class Fluxo:
                 self._leituras_cancelamento = self._leituras_cancelamento + 1 if cancelada else 0
                 if self._leituras_cancelamento >= 2:
                     self._encerrar_espera_fila()
+                    self._fila_bloqueada = False
                     return Acao("fila_cancelada")
             return None
         if not jogo_novo and agora >= self._proximo_texto_fila:
@@ -483,7 +510,7 @@ class Fluxo:
                 self._fila_contada = True
                 self.confirmacao.limpar()
                 return Acao("fila_confirmada")
-        if not (self._leituras_fila or partida):
+        if not self._fila_bloqueada and not (self._leituras_fila or partida):
             botoes = tuple(nome for nome in BOTOES_LOBBY if nome not in self._botoes_fila_clicados)
             alvo = self._procurar(quadro, *botoes)
             if alvo:
@@ -511,7 +538,7 @@ class Fluxo:
         elif self._bloqueado:
             self._quadros_sem_alvo = 0
         if self._prazo_fila is not None:
-            em_jogo = (partida or no_onibus) and not self.detector.fora_de_partida(quadro)
+            em_jogo = partida
             return self._confirmar_fila(quadro, agora, em_jogo, hud_visivel, no_onibus)
         self._botoes_fila_clicados.clear()
         if self._prazo_menu is not None:
@@ -541,7 +568,9 @@ class Fluxo:
         if self._prazo_lobby is not None and agora >= self._prazo_lobby:
             self._prazo_lobby = None
             return Acao("lobby_nao_encontrado")
-        alvo = self._procurar(quadro, "resgatar") or self._procurar(quadro, *BOTOES_LOBBY)
+        alvo = self._procurar(quadro, "resgatar")
+        if alvo is None and not self._fila_bloqueada:
+            alvo = self._procurar(quadro, *BOTOES_LOBBY)
         if alvo:
             self.inicio_partida = None
             self._sem_leitura_desde = None
@@ -555,16 +584,14 @@ class Fluxo:
             self.confirmacao.limpar()
             return None
         self.confirmacao.limpar()
-        if self._aguarda_hud_novo:
-            self._observar_transicao(hud_visivel, no_onibus)
-            no_onibus = no_onibus and (self._transicao_hud or not self._onibus_no_clique)
-            partida = partida and (self._transicao_hud or no_onibus)
-        if partida or no_onibus:
+        inventario_aberto = bool(partida and self._procurar(quadro, "inventario"))
+        if inventario_aberto:
+            self._quadros_hud_afk = 0
+        if partida:
             self._sem_leitura_desde = None
             self._aviso_leitura = False
-            if self.inicio_partida is None:
-                self._iniciar_partida(agora)
-            if (self.config.sair_por_tempo
+            if (self.inicio_partida is not None and self.config.sair_por_tempo
+                    and not inventario_aberto and not no_onibus
                     and agora - self.inicio_partida >= self.config.minutos_partida * 60):
                 self._prazo_menu = agora + 10
                 self._proxima_acao = agora + 1
@@ -574,17 +601,16 @@ class Fluxo:
         elif not self._aviso_leitura and agora - self._sem_leitura_desde >= self.config.timeout_lobby:
             self._aviso_leitura = True
             return Acao("tela_nao_reconhecida")
-        if not (partida and self.config.anti_afk):
+        if not (self.inicio_partida is not None and partida and not no_onibus
+                and self.config.anti_afk):
             return None
         # O ícone do menu isolado também pode aparecer junto do HUD de jogo.
         # Exige o controle de saída, com limiar maior se não houver cursor.
         if self.detector.procurar(quadro, ("voltar_lobby",), limiar=None if cursor else 0.92):
             self._quadros_hud_afk = 0
             return Acao("movimento_menu")
-        if cursor and self._procurar(quadro, "inventario"):
-            self._quadros_hud_afk = 0
-            self._proxima_acao = agora + 1.5
-            return Acao("esc")
+        if inventario_aberto:
+            return None
         self._quadros_hud_afk += 1
         if self._quadros_hud_afk < 2:
             return None

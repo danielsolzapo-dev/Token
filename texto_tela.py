@@ -55,7 +55,9 @@ def combinar(linhas, *, vertical=False):
 def identificar(linhas, largura, altura, tipo, *, sinalizar_ambiguidade=False):
     if tipo == "jogar":
         return next((linha for linha in combinar(linhas) if normalizar(linha.texto) in
-                     {"JOGAR NOVAMENTE", "PLAY AGAIN", "READY UP AGAIN"}), None)
+                     {"JOGAR NOVAMENTE", "JOGARNOVAMENTE", "JOGAROVAMENTE",
+                      "PLAY AGAIN", "PLAYAGAIN",
+                      "READY UP AGAIN", "READYUPAGAIN"}), None)
     if tipo == "fila":
         rotulos = {
             "PROCURANDO PARTIDA", "BUSCANDO PARTIDA", "CANCELAR PAREAMENTO",

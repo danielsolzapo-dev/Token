@@ -246,6 +246,7 @@ class Painel:
             self.fluxo = Fluxo(Detector(config=config))
         else:
             self.fluxo.config = self.fluxo.detector.config = config
+        self.fluxo.rearmar_fila()
         self.status.set("Iniciando")
         self.botao.configure(text="Pausar")
         self.parar = Event()
@@ -271,7 +272,11 @@ class Painel:
         if alvo:
             x, y, w, h = alvo.caixa
             cv2.rectangle(quadro, (x, y), (x + w, y + h), (85, 224, 183), max(2, quadro.shape[0] // 275))
-            texto = f"{ROTULOS[alvo.nome]} · {alvo.score:.0%} · {alvo.metodo}"
+            centro_x, centro_y = (round(ponto) for ponto in alvo.centro)
+            cv2.drawMarker(quadro, (centro_x, centro_y), (0, 0, 255), cv2.MARKER_CROSS, 15, 2)
+            metodo = "cor/OCR" if alvo.metodo == "cor+OCR" else "template"
+            texto = (f"{ROTULOS.get(alvo.nome, alvo.nome)} · centro ({centro_x}, {centro_y})"
+                     f" · {metodo} · score {alvo.score:.0%}")
         elif detector.dialogo_ambiguo:
             texto = "Mais de um botão de confirmação plausível nesta imagem."
         else:
@@ -343,6 +348,11 @@ def verificar_build():
     hud[475:486, 32:105] = (0, 215, 145)
     if not detector.em_partida(hud) or detector.em_partida(np.zeros_like(hud)):
         raise RuntimeError("Falha na leitura da barra de vida.")
+    fluxo_sem_fila = Fluxo(detector)
+    for instante in (0, 0.3, 0.8, 1.1, 1.5):
+        fluxo_sem_fila.passo(hud, instante, partida=True)
+    if fluxo_sem_fila.inicio_partida is not None or fluxo_sem_fila.partidas:
+        raise RuntimeError("HUD já visível iniciou uma partida sem nova fila.")
     from PIL import ImageDraw, ImageFont
     modal = Image.new("RGB", (960, 540), "#17263a")
     fonte = ImageFont.truetype(str(Path(os.environ["WINDIR"]) / "Fonts" / "arialbd.ttf"), 34)
@@ -369,8 +379,13 @@ def verificar_build():
     desenho.rectangle((600, 220, 849, 269), fill="#ffff00")
     desenho.text((724, 245), "JOGAR   NOVAMENTE", font=fonte_botao, anchor="mm", fill="#101010")
     alvo = detector.detectar(cv2.cvtColor(np.asarray(botao), cv2.COLOR_RGB2BGR))
-    if alvo is None or alvo.metodo != "cor" or not 650 < alvo.centro[0] < 790:
+    if alvo is None or alvo.metodo != "cor+OCR" or not 650 < alvo.centro[0] < 790:
         raise RuntimeError("Falha na leitura por cor e texto de Jogar Novamente.")
+
+    sem_rotulo = Image.new("RGB", (960, 540), "#17263a")
+    ImageDraw.Draw(sem_rotulo).rectangle((600, 220, 849, 269), fill="#ffff00")
+    if detector.detectar(cv2.cvtColor(np.asarray(sem_rotulo), cv2.COLOR_RGB2BGR)) is not None:
+        raise RuntimeError("Uma caixa amarela sem rótulo foi confundida com Jogar Novamente.")
 
     botoes = Image.new("RGB", (960, 540), "#17263a")
     desenho = ImageDraw.Draw(botoes)
