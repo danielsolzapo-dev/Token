@@ -196,30 +196,55 @@ class Windows:
                 raise
         return True
 
+    def _motivo_interrupcao(self, janela, parar):
+        if parar.is_set():
+            return "cancelado"
+        if self.user.GetForegroundWindow() != janela.hwnd:
+            return "foco_perdido"
+        if self._area(janela.hwnd) != janela.area:
+            return "geometria_alterada"
+        return "entrada_interrompida"
+
     def executar(self, janela, acao, parar):
+        self.ultima_falha = None
         if not self.disponivel(janela, parar):
+            self.ultima_falha = self._motivo_interrupcao(janela, parar)
             return False
         if acao.tipo == "esc":
-            return self._pressionar(janela, parar, (1,), 0.06)
+            enviado = self._pressionar(janela, parar, (1,), 0.06)
+            if not enviado:
+                self.ultima_falha = self._motivo_interrupcao(janela, parar)
+            return enviado
         if acao.tipo == "clicar":
             esquerda, topo, direita, base = janela.area
             x, y = acao.alvo.centro
             x, y = esquerda + round(x), topo + round(y)
             if not (esquerda <= x < direita and topo <= y < base):
+                self.ultima_falha = "alvo_fora_da_janela"
                 return False
-            if self.fortnite_em_foco() != janela or not self.disponivel(janela, parar):
+            if self.fortnite_em_foco() != janela:
+                self.ultima_falha = "processo_fora_de_foco"
+                return False
+            if not self.disponivel(janela, parar):
+                self.ultima_falha = self._motivo_interrupcao(janela, parar)
                 return False
             if not self.user.SetCursorPos(x, y):
+                self.ultima_falha = "posicionamento_do_cursor_recusado"
                 return False
             if not self._esperar(janela, parar, 0.10):
+                self.ultima_falha = self._motivo_interrupcao(janela, parar)
                 return False
             ponto = wintypes.POINT()
             if (not self.user.GetCursorPos(ctypes.byref(ponto))
                     or max(abs(ponto.x - x), abs(ponto.y - y)) > 4
                     or self.user.GetAncestor(self.user.WindowFromPoint(ponto), 2) != janela.hwnd
                     or self.fortnite_em_foco() != janela):
+                self.ultima_falha = "validacao_do_alvo_recusada"
                 return False
-            return self._clique(janela, parar, 0.15 if acao.tentativa % 2 else 0.085)
+            enviado = self._clique(janela, parar, 0.15 if acao.tentativa % 2 else 0.085)
+            if not enviado:
+                self.ultima_falha = self._motivo_interrupcao(janela, parar)
+            return enviado
         if acao.tipo == "movimento":
             for tipo, *dados in acao.passos:
                 if tipo == "pausa":
@@ -232,5 +257,8 @@ class Windows:
                 else:
                     ok = self._pressionar(janela, parar, *dados)
                 if not ok:
+                    self.ultima_falha = self._motivo_interrupcao(janela, parar)
                     return False
-        return True
+            return True
+        self.ultima_falha = "tipo_de_acao_desconhecido"
+        return False

@@ -12,9 +12,15 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 
 O app procura **Jogar Novamente**, **Continuar** e os botões do lobby. A detecção usa imagens de referência em múltiplas escalas; a alternativa amarelo+OCR para **Jogar Novamente** só aceita o rótulo dentro do controle. A leitura em português ou inglês identifica fila e diálogo de saída, e não confirma quando há mais de um diálogo plausível.
 
-O contador avança uma vez por fila reconhecida. O cronômetro e o movimento anti-AFK só começam depois de um período estável sem HUD/ônibus e do reconhecimento estável do HUD de uma partida nova; um HUD antigo, uma falha isolada de leitura ou um ônibus já visível não confirmam uma nova partida. Um botão de lobby reaparecendo não reinicia a fila sozinho: depois do timeout, recomece com **Iniciar/F6** ou aguarde o reconhecimento explícito de cancelamento.
+O contador avança uma vez por fila reconhecida. O cronômetro e o movimento anti-AFK só começam após uma transição confirmada e três leituras estáveis do HUD de uma partida nova. Se já havia HUD no clique, ele precisa desaparecer em pelo menos quatro leituras ao longo de 0,65 s antes de reaparecer; um HUD persistente ou uma falha isolada de leitura não inicia a partida. O ônibus, mesmo já visível antes do clique, não confirma partida sozinho. Um botão de lobby reaparecendo não reinicia a fila automaticamente: depois do timeout, recomece com **Iniciar/F6** ou aguarde o reconhecimento explícito de cancelamento.
 
-O anti-AFK fica bloqueado sem uma partida recém-confirmada, no ônibus, inventário, espectador, tela desconhecida, pausa ou perda de foco. A janela e suas coordenadas são validadas antes de cada ação e entre segmentos de entrada. O Windows recebe entradas globais; essas verificações reduzem o risco de enviar comandos fora do jogo, mas não eliminam a corrida entre a última validação e o envio.
+O anti-AFK fica bloqueado sem uma partida recém-confirmada, no ônibus, inventário, espectador, menu de saída/pausa, tela desconhecida ou perda de foco. O status mostra o motivo do bloqueio. A janela e suas coordenadas são validadas antes de cada ação e entre segmentos de entrada. O Windows recebe entradas globais; essas verificações reduzem o risco de enviar comandos fora do jogo, mas não eliminam a corrida entre a última validação e o envio.
+
+Ao abrir, o app consulta os releases do GitHub em segundo plano. Se houver versão nova, pergunta antes de baixar; o executável e seu SHA-256 são verificados antes de substituir o arquivo atual e reiniciar o app. A instalação automática só funciona no executável Windows publicado, exige internet e permissão de escrita na pasta do app. Se estiver executando o código-fonte, o app abre a página do release para atualização manual. Um arquivo ausente ou checksum inválido bloqueia a instalação.
+
+## Diagnóstico
+
+O monitoramento grava estados, bloqueios do anti-AFK, ações solicitadas/concluídas/não concluídas (com motivo) e erros em `%LOCALAPPDATA%\AutoFarmToken\autofarm.log`. O arquivo é rotativo (1 MB, mantendo até três cópias). Clique em **Abrir log** para acessá-lo e anexe o arquivo ao relatar uma falha. O log não contém capturas de tela nem texto bruto reconhecido por OCR; ele só é criado quando o monitoramento é iniciado.
 
 Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção depende da resolução, escala e idioma da interface do jogo e pode precisar de ajustes após atualizações do Fortnite. Confirme se automação de entradas é permitida pelas regras do jogo; não use o aplicativo se isso violar as regras ou políticas aplicáveis.
 
@@ -32,9 +38,9 @@ Inicie, teste e compile:
 ```powershell
 py -3.14 app.py
 py -3.14 -m unittest discover -s tests -v
-py -3.14 -m py_compile app.py logica_autofarm.py texto_tela.py windows_game.py
+py -3.14 -m py_compile app.py atualizador.py logica_autofarm.py texto_tela.py windows_game.py
 py -3.14 app.py --verificar-build
 py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" app.py
 ```
 
-O executável é gerado em `dist/`. O fluxo do GitHub Actions inclui os modelos OCR e as imagens de referência e executa verificações positivas e negativas no executável empacotado. Os testes usam detector, relógio e janela simulados e imagens sintéticas; não exigem Fortnite aberto, rede ou esperas reais. A confirmação final de foco, geometria e reconhecimento visual ainda precisa ser feita manualmente com Fortnite aberto.
+O executável é gerado em `dist/`. O fluxo do GitHub Actions inclui os modelos OCR e as imagens de referência, executa verificações positivas e negativas no executável empacotado e publica um arquivo SHA-256 para o atualizador. Os testes do atualizador simulam respostas HTTP e não acessam a rede. Os demais testes usam detector, relógio e janela simulados e imagens sintéticas; não exigem Fortnite aberto, rede ou esperas reais. A confirmação final de foco, geometria, atualização instalada e reconhecimento visual ainda precisa ser feita manualmente.

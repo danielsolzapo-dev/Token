@@ -333,6 +333,9 @@ class Fluxo:
         self._transicao_hud = False
         self._inicio_sem_sinais = None
         self._inicio_hud_novo = None
+        self._hud_visto = False
+        self._quadros_sem_hud_previo = 0
+        self._inicio_sem_hud_previo = None
         self._fila_bloqueada = False
         self._botoes_fila_clicados = set()
         self._leituras_fila = 0
@@ -370,6 +373,19 @@ class Fluxo:
         self._proxima_caminhada = agora
         self._inicio_hud_novo = None
 
+    def _observar_hud_previo(self, hud_visivel, agora):
+        if hud_visivel:
+            self._hud_visto = True
+            self._quadros_sem_hud_previo = 0
+            self._inicio_sem_hud_previo = None
+            return
+        if self._inicio_sem_hud_previo is None:
+            self._inicio_sem_hud_previo = agora
+        self._quadros_sem_hud_previo += 1
+        if (self._quadros_sem_hud_previo >= 4
+                and agora - self._inicio_sem_hud_previo >= 0.65):
+            self._hud_visto = False
+
     def rearmar_fila(self):
         """Permite uma nova tentativa somente após ação explícita de iniciar."""
         if self._prazo_fila is None or self._fila_expirada:
@@ -396,7 +412,7 @@ class Fluxo:
             return None
         return Acao("clicar", alvo, tentativa=self._tentativas)
 
-    def registrar_clique(self, acao, enviado, agora, *, no_onibus=False):
+    def registrar_clique(self, acao, enviado, agora, *, hud_visivel=False):
         """Registra a tentativa quando o Windows aceitou a entrada do clique."""
         self._proxima_acao = agora + (1.5 if enviado else 0.35)
         if not enviado:
@@ -408,14 +424,14 @@ class Fluxo:
         if self._pendente in BOTOES_FILA:
             self._fila_bloqueada = True
             self._botoes_fila_clicados.add(self._pendente)
-            self._transicao_hud = False
+            self._transicao_hud = not (hud_visivel or self._hud_visto)
             self._quadros_sem_hud = 0
             self._inicio_sem_sinais = self._inicio_hud_novo = None
             self._quadros_partida = 0
 
-    def _observar_transicao(self, hud_visivel, no_onibus, agora):
+    def _observar_transicao(self, hud_visivel, agora):
         if not self._transicao_hud:
-            if hud_visivel or no_onibus:
+            if hud_visivel:
                 self._quadros_sem_hud = 0
                 self._inicio_sem_sinais = None
                 return
@@ -426,7 +442,7 @@ class Fluxo:
                 self._quadros_sem_hud >= 4 and agora - self._inicio_sem_sinais >= 0.65
             )
 
-    def _verificar_clique(self, quadro, agora, hud_visivel, no_onibus):
+    def _verificar_clique(self, quadro, agora, hud_visivel):
         nome = self._pendente
         abriu_modal = nome == "voltar_lobby" and self.detector.ler_contexto(quadro, "confirmar_sair")
         alvo = None if abriu_modal else self._alvo(quadro, nome)
@@ -437,7 +453,7 @@ class Fluxo:
             return self._clicar_e_verificar(alvo, quadro)
         if not alvo:
             if nome in BOTOES_FILA:
-                self._observar_transicao(hud_visivel, no_onibus, agora)
+                self._observar_transicao(hud_visivel, agora)
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo < 2:
                 return None
@@ -468,14 +484,14 @@ class Fluxo:
         self._botoes_fila_clicados.clear()
         self.confirmacao.limpar()
 
-    def _confirmar_fila(self, quadro, agora, partida, hud_visivel, no_onibus):
+    def _confirmar_fila(self, quadro, agora, partida, hud_visivel):
         if agora >= self._prazo_fila and not self._fila_expirada:
             if not self._fila_contada:
                 self._encerrar_espera_fila()
                 return Acao("partida_nao_confirmada")
             self._fila_expirada = True
             return Acao("fila_sem_partida")
-        self._observar_transicao(hud_visivel, no_onibus, agora)
+        self._observar_transicao(hud_visivel, agora)
         jogo_novo = partida and self._transicao_hud
         self._quadros_partida = self._quadros_partida + 1 if jogo_novo else 0
         if jogo_novo:
@@ -524,13 +540,14 @@ class Fluxo:
         if not foco:
             self.pausar()
             return None
+        hud_visivel = partida if hud_visivel is None else hud_visivel
+        self._observar_hud_previo(hud_visivel, agora)
         if agora < self._proxima_acao:
             return None
         if not partida:
             self._quadros_hud_afk = 0
-        hud_visivel = partida if hud_visivel is None else hud_visivel
         if self._pendente:
-            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus)
+            return self._verificar_clique(quadro, agora, hud_visivel)
         if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo >= 2:
@@ -539,7 +556,7 @@ class Fluxo:
             self._quadros_sem_alvo = 0
         if self._prazo_fila is not None:
             em_jogo = partida
-            return self._confirmar_fila(quadro, agora, em_jogo, hud_visivel, no_onibus)
+            return self._confirmar_fila(quadro, agora, em_jogo, hud_visivel)
         self._botoes_fila_clicados.clear()
         if self._prazo_menu is not None:
             if agora >= self._prazo_menu:

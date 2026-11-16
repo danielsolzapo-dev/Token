@@ -2,6 +2,7 @@ from dataclasses import replace
 import os
 from pathlib import Path
 from queue import SimpleQueue
+from tempfile import TemporaryDirectory
 from threading import Event
 from types import SimpleNamespace
 import unittest
@@ -11,7 +12,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import Painel, monitorar
+from app import Painel, configurar_logger, monitorar
 from logica_autofarm import Acao, Alvo, Config, Detector, Fluxo, TEMPLATES
 from texto_tela import Linha, Reconhecedor, identificar
 from windows_game import Janela, Windows
@@ -49,12 +50,13 @@ class FluxoTest(unittest.TestCase):
         self.detector.nome = nome
         acao = self.fluxo.passo(self.quadro, instante, **kwargs)
         if acao and acao.tipo == "clicar":
-            self.fluxo.registrar_clique(acao, enviado, instante, no_onibus=kwargs.get("no_onibus", False))
+            hud_visivel = kwargs.get("hud_visivel", kwargs.get("partida", False))
+            self.fluxo.registrar_clique(acao, enviado, instante, hud_visivel=hud_visivel)
         return acao
 
-    def iniciar_clique(self, nome):
-        self.assertIsNone(self.passo(0, nome))
-        clique = self.passo(0.2, nome)
+    def iniciar_clique(self, nome, **kwargs):
+        self.assertIsNone(self.passo(0, nome, **kwargs))
+        clique = self.passo(0.2, nome, **kwargs)
         self.assertEqual(clique.alvo.nome, nome)
         self.assertEqual(clique.tentativa, 0)
 
@@ -187,7 +189,7 @@ class FluxoTest(unittest.TestCase):
         self.assertIsNone(self.fluxo.inicio_partida)
 
     def test_hud_so_confirma_depois_de_intervalo_sem_sinais(self):
-        self.iniciar_clique("jogar")
+        self.iniciar_clique("jogar", partida=True)
         self.passo(2, partida=True)
         self.passo(2.2, partida=True)
         self.passo(3, partida=True)
@@ -198,6 +200,21 @@ class FluxoTest(unittest.TestCase):
         for instante in (4.9, 5.1, 5.3):
             acao = self.passo(instante, partida=True)
         self.assertEqual(acao.tipo, "partida_confirmada")
+
+    def test_hud_novo_estavel_apos_onibus_presente_ativa_anti_afk(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True, sair_por_tempo=False)
+        self.iniciar_clique("jogar", no_onibus=True)
+        self.passo(2)
+        self.passo(2.2)
+        for instante in (2.4, 2.6, 2.8, 3.0):
+            self.assertIsNone(self.passo(instante, no_onibus=True))
+        for instante in (3.2, 3.4, 3.6):
+            acao = self.passo(instante, partida=True, no_onibus=True)
+        self.assertEqual(acao.tipo, "partida_confirmada")
+        self.assertEqual(self.fluxo.inicio_partida, 3.6)
+        self.assertEqual(self.fluxo.partidas, 1)
+        self.assertIsNone(self.passo(3.8, partida=True))
+        self.assertEqual(self.passo(4.0, partida=True).tipo, "movimento")
 
     def test_pronto_substitui_jogar_sem_esperar_timeout(self):
         self.iniciar_clique("lobby_jogar")
@@ -500,16 +517,34 @@ class MonitorTest(unittest.TestCase):
             tentativas.append(acao.tentativa)
             if len(tentativas) == 4:
                 sinal.set()
+                raise OSError("falha simulada")
             return False
 
         windows = SimpleNamespace(
             fortnite_em_foco=lambda: 42, capturar=lambda _: quadro.copy(),
             disponivel=lambda *_: True, cursor_visivel=lambda: False, executar=executar,
+            aguardar=lambda _: None,
         )
-        with patch("app.time", SimpleNamespace(monotonic=lambda: next(instantes))):
-            monitorar(windows, fluxo, eventos, parar)
+        with TemporaryDirectory() as diretorio:
+            logger = configurar_logger(Path(diretorio) / "autofarm.log")
+            with patch("app.configurar_logger", return_value=logger), \
+                    patch("app.time", SimpleNamespace(monotonic=lambda: next(instantes))):
+                monitorar(windows, fluxo, eventos, parar)
+            for handler in logger.handlers:
+                handler.flush()
+            texto = (Path(diretorio) / "autofarm.log").read_text(encoding="utf-8")
+            for handler in logger.handlers:
+                logger.removeHandler(handler)
+                handler.close()
+        eventos_lidos = []
+        while not eventos.empty():
+            eventos_lidos.append(eventos.get())
         self.assertEqual(tentativas, [0, 0, 0, 0])
         self.assertEqual(fluxo.partidas, 0)
+        self.assertIn("acao_nao_concluida", texto)
+        self.assertIn("motivo=entrada_recusada", texto)
+        self.assertIn("acao_com_erro", texto)
+        self.assertIn(("erro", "falha simulada"), eventos_lidos)
 
 
 class WindowsTest(unittest.TestCase):
@@ -525,6 +560,17 @@ class WindowsTest(unittest.TestCase):
         windows.disponivel = lambda *_: True
         acao = Acao("clicar", Alvo("jogar", 1, (110, 110, 20, 20), 1))
         self.assertFalse(windows.executar(Janela(42, (0, 0, 100, 100)), acao, Event()))
+        self.assertEqual(windows.ultima_falha, "alvo_fora_da_janela")
+
+    def test_recusa_de_posicionar_cursor_expoe_motivo(self):
+        janela = Janela(42, (0, 0, 100, 100))
+        windows = object.__new__(Windows)
+        windows.disponivel = lambda *_: True
+        windows.fortnite_em_foco = lambda: janela
+        windows.user = SimpleNamespace(SetCursorPos=lambda *_: False)
+        acao = Acao("clicar", Alvo("jogar", 1, (10, 10, 20, 20), 1))
+        self.assertFalse(windows.executar(janela, acao, Event()))
+        self.assertEqual(windows.ultima_falha, "posicionamento_do_cursor_recusado")
 
     def test_fallback_ao_soltar_tecla_e_tenta_soltar_as_demais(self):
         janela = Janela(42, (0, 0, 100, 100))
