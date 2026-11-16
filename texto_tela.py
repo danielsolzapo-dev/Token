@@ -26,9 +26,32 @@ def normalizar(texto):
     return " ".join(re.findall(r"[A-Z0-9]+", sem_acentos))
 
 
+def combinar(linhas, *, vertical=False):
+    """Inclui pares de caixas próximas do mesmo rótulo ou título."""
+    yield from linhas
+    eixo = 1 if vertical else 0
+    ordenadas = sorted(linhas, key=lambda linha: linha.caixa[eixo])
+    for i, primeira in enumerate(ordenadas):
+        x, y, w, h = primeira.caixa
+        for segunda in ordenadas[i + 1:]:
+            xx, yy, ww, hh = segunda.caixa
+            altura = max(h, hh)
+            if vertical:
+                perto = (-0.25 * altura <= yy - (y + h) <= 1.1 * altura
+                         and abs(primeira.centro[0] - segunda.centro[0]) <= 0.35 * max(w, ww))
+            else:
+                perto = (-0.25 * altura <= xx - (x + w) <= 1.5 * altura
+                         and abs(primeira.centro[1] - segunda.centro[1]) <= 0.45 * altura)
+            if perto:
+                esquerda, topo = min(x, xx), min(y, yy)
+                direita, base = max(x + w, xx + ww), max(y + h, yy + hh)
+                yield Linha(f"{primeira.texto} {segunda.texto}",
+                            (esquerda, topo, direita - esquerda, base - topo))
+
+
 def identificar(linhas, largura, altura, tipo):
     if tipo == "jogar":
-        return next((linha for linha in linhas if normalizar(linha.texto) in
+        return next((linha for linha in combinar(linhas) if normalizar(linha.texto) in
                      {"JOGAR NOVAMENTE", "PLAY AGAIN", "READY UP AGAIN"}), None)
     if tipo == "fila":
         rotulos = {
@@ -39,7 +62,12 @@ def identificar(linhas, largura, altura, tipo):
                      and normalizar(linha.texto) in rotulos), None)
     central = [linha for linha in linhas if 0.20 * largura <= linha.centro[0] <= 0.80 * largura
                and 0.18 * altura <= linha.centro[1] <= 0.88 * altura]
-    for linha in central:
+    afirmativos = {"SIM", "CONFIRMAR", "YES", "CONFIRM"}
+    saidas = {"VOLTAR AO LOBBY", "SAIR DA PARTIDA", "RETURN TO LOBBY", "LEAVE MATCH"}
+    negativos = [linha for linha in central if normalizar(linha.texto) in {"NAO", "CANCELAR", "NO", "CANCEL"}]
+    botoes = [(linha, normalizar(linha.texto)) for linha in combinar(central)]
+    candidatos = []
+    for linha in combinar(list(combinar(central)), vertical=True):
         titulo = normalizar(linha.texto)
         menciona_saida = any(p in titulo for p in (
             "VOLTAR AO LOBBY", "SAIR DA PARTIDA", "ABANDONAR A PARTIDA", "RETURN TO LOBBY", "LEAVE MATCH",
@@ -49,18 +77,24 @@ def identificar(linhas, largura, altura, tipo):
         ))
         if not (menciona_saida and pergunta):
             continue
-        botoes = [botao for botao in central
-                  if 0.03 * altura <= botao.centro[1] - linha.centro[1] <= 0.50 * altura]
-        for botao in botoes:
-            rotulo = normalizar(botao.texto)
-            if rotulo in {"VOLTAR AO LOBBY", "SAIR DA PARTIDA", "RETURN TO LOBBY", "LEAVE MATCH"}:
-                return botao
-            if rotulo in {"SIM", "CONFIRMAR", "YES", "CONFIRM"} and any(
-                normalizar(outro.texto) in {"NAO", "CANCELAR", "NO", "CANCEL"}
-                for outro in botoes
-            ):
-                return botao
-    return None
+        centro_titulo = linha.centro[0]
+        base_titulo = linha.caixa[1] + linha.caixa[3]
+        for botao, rotulo in botoes:
+            if rotulo not in afirmativos | saidas:
+                continue
+            x, y = botao.centro
+            if not 0.03 * altura <= y - base_titulo <= 0.50 * altura:
+                continue
+            for negativo in negativos:
+                nx, ny = negativo.centro
+                alinhamento = abs(y - ny) / altura
+                desvio_centro = abs((x + nx) / 2 - centro_titulo) / largura
+                distancia = abs(nx - x) / largura
+                lado_a_lado = alinhamento <= 0.045 and 0.05 <= distancia <= 0.48
+                empilhados = 0.05 <= (ny - y) / altura <= 0.18 and distancia <= 0.06
+                if desvio_centro <= 0.12 and (lado_a_lado or empilhados):
+                    candidatos.append(((rotulo not in afirmativos, alinhamento + desvio_centro), botao))
+    return min(candidatos, key=lambda item: item[0])[1] if candidatos else None
 
 
 class Reconhecedor:

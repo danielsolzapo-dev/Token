@@ -26,6 +26,7 @@ TEMPLATES = {
     "reinicializando": ("reinicializando.png", (0.3, 0.45, 0.7, 0.7), 1.0),
 }
 BOTOES_LOBBY = ("lobby_jogar", "lobby_pronto")
+BOTOES_FILA = ("jogar", *BOTOES_LOBBY)
 AVISOS = ("onibus", "reinicializando")
 
 
@@ -254,11 +255,9 @@ class Detector:
             return referencia
         if self.config.fallback_cor:
             alvo = self.buscar_por_cor(quadro)
-            if alvo and referencia and referencia.score >= 0.72:
-                cx, cy = referencia.centro
+            if alvo and not self.fora_de_partida(quadro):
                 x, y, w, h = alvo.caixa
-                if (x <= cx <= x + w and y <= cy <= y + h and not self.fora_de_partida(quadro)
-                        and self.ler_contexto(quadro[y:y + h, x:x + w], "jogar")):
+                if self.ler_contexto(quadro[y:y + h, x:x + w], "jogar"):
                     return alvo
         if self.config.clicar_continuar:
             return self.procurar(quadro, ("continuar",))
@@ -327,6 +326,11 @@ class Fluxo:
         self._prazo_fila = None
         self._fila_contada = False
         self._quadros_partida = 0
+        self._quadros_sem_hud = 0
+        self._transicao_hud = False
+        self._aguarda_hud_novo = False
+        self._onibus_no_clique = False
+        self._botoes_fila_clicados = set()
         self._leituras_fila = 0
         self._proximo_texto_fila = 0.0
         self._sem_leitura_desde = None
@@ -343,11 +347,13 @@ class Fluxo:
     def pausar(self):
         self.confirmacao.limpar()
         self._quadros_sem_alvo = self._quadros_partida = self._leituras_fila = 0
+        self._quadros_sem_hud = 0
         self._sem_leitura_desde = None
         self._aviso_leitura = False
 
     def _iniciar_partida(self, agora):
         self.inicio_partida = agora
+        self._aguarda_hud_novo = False
         self._desvio = (0.0, 0.0, 0.0)
         self._sem_pulo_ate = 0.0
 
@@ -362,35 +368,54 @@ class Fluxo:
             return self.detector.ler_contexto(quadro, nome)
         return self._procurar(quadro, nome)
 
-    def _clicar_e_verificar(self, alvo, agora, quadro):
+    def _clicar_e_verificar(self, alvo, quadro):
         if alvo.nome == self._bloqueado:
             return None
         if self._pendente is None and not self.confirmacao.observar(
                 alvo, quadro.shape[0], self.config.confirmacoes):
             return None
-        self._pendente = alvo.nome
-        tentativa = self._tentativas
+        return Acao("clicar", alvo, tentativa=self._tentativas)
+
+    def registrar_clique(self, acao, enviado, agora, *, no_onibus=False):
+        """Registra a tentativa quando o Windows aceitou a entrada do clique."""
+        self._proxima_acao = agora + (1.5 if enviado else 0.35)
+        if not enviado:
+            self.pausar()
+            return
+        self._pendente = acao.alvo.nome
         self._tentativas += 1
         self._quadros_sem_alvo = 0
-        self._proxima_acao = agora + 1.5
-        return Acao("clicar", alvo, tentativa=tentativa)
+        if self._pendente in BOTOES_FILA:
+            self._botoes_fila_clicados.add(self._pendente)
+            self._transicao_hud = False
+            self._quadros_sem_hud = 0
+            self._onibus_no_clique = no_onibus
 
-    def _verificar_clique(self, quadro, agora):
+    def _observar_transicao(self, hud_visivel, no_onibus):
+        if not self._transicao_hud:
+            self._quadros_sem_hud = 0 if hud_visivel or no_onibus else self._quadros_sem_hud + 1
+            self._transicao_hud = self._quadros_sem_hud >= 2
+
+    def _verificar_clique(self, quadro, agora, hud_visivel, no_onibus):
         nome = self._pendente
         abriu_modal = nome == "voltar_lobby" and self.detector.ler_contexto(quadro, "confirmar_sair")
         alvo = None if abriu_modal else self._alvo(quadro, nome)
         if alvo and self._tentativas < 3:
-            return self._clicar_e_verificar(alvo, agora, quadro)
+            return self._clicar_e_verificar(alvo, quadro)
         if not alvo:
+            if nome in BOTOES_FILA:
+                self._observar_transicao(hud_visivel, no_onibus)
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo < 2:
                 return None
         self._pendente, self._tentativas = None, 0
         if alvo:
             self._bloqueado = nome
+            self._quadros_sem_alvo = 0
             return Acao("clique_ignorado", alvo)
-        if nome == "jogar" or nome in BOTOES_LOBBY:
+        if nome in BOTOES_FILA:
             self.inicio_partida = None
+            self._aguarda_hud_novo = True
             self._prazo_lobby = None
             self._prazo_fila = agora + self.config.timeout_lobby
             self._fila_contada = False
@@ -403,37 +428,50 @@ class Fluxo:
             self._prazo_lobby = agora + self.config.timeout_lobby
         return Acao("clique_confirmado")
 
-    def _confirmar_fila(self, quadro, agora, partida):
+    def _confirmar_fila(self, quadro, agora, partida, hud_visivel, no_onibus):
         if agora >= self._prazo_fila:
             self._prazo_fila = None
+            self._botoes_fila_clicados.clear()
+            self.confirmacao.limpar()
             return Acao("partida_nao_confirmada")
-        self._quadros_partida = self._quadros_partida + 1 if partida else 0
+        self._observar_transicao(hud_visivel, no_onibus)
+        jogo_novo = partida and (self._transicao_hud or (no_onibus and not self._onibus_no_clique))
+        self._quadros_partida = self._quadros_partida + 1 if jogo_novo else 0
         if self._quadros_partida >= 2:
             self._prazo_fila = None
+            self._botoes_fila_clicados.clear()
             self._iniciar_partida(agora)
             if not self._fila_contada:
                 self.partidas += 1
             return Acao("partida_confirmada")
-        if self._fila_contada or partida or agora < self._proximo_texto_fila:
-            return None
-        self._proximo_texto_fila = agora + 1
-        fila = self.detector.ler_contexto(quadro, "fila")
-        self._leituras_fila = self._leituras_fila + 1 if fila else 0
-        if self._leituras_fila >= 2:
-            self.partidas += 1
-            self._fila_contada = True
-            return Acao("fila_confirmada")
+        if not self._fila_contada and not jogo_novo and agora >= self._proximo_texto_fila:
+            self._proximo_texto_fila = agora + 1
+            fila = self.detector.ler_contexto(quadro, "fila")
+            self._leituras_fila = self._leituras_fila + 1 if fila else 0
+            if self._leituras_fila >= 2:
+                self.partidas += 1
+                self._fila_contada = True
+                self.confirmacao.limpar()
+                return Acao("fila_confirmada")
+        if not (self._fila_contada or self._leituras_fila or partida):
+            botoes = tuple(nome for nome in BOTOES_LOBBY if nome not in self._botoes_fila_clicados)
+            alvo = self._procurar(quadro, *botoes)
+            if alvo:
+                return self._clicar_e_verificar(alvo, quadro)
+        self.confirmacao.limpar()
         return None
 
-    def passo(self, quadro, agora, *, partida=False, foco=True, cursor=False, no_onibus=False):
+    def passo(self, quadro, agora, *, partida=False, foco=True, cursor=False, no_onibus=False,
+              hud_visivel=None):
         """Recebe imagem BGR e tempo monotônico em segundos. Retorna Acao ou None."""
         if not foco:
             self.pausar()
             return None
         if agora < self._proxima_acao:
             return None
+        hud_visivel = partida if hud_visivel is None else hud_visivel
         if self._pendente:
-            return self._verificar_clique(quadro, agora)
+            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus)
         if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo >= 2:
@@ -442,7 +480,8 @@ class Fluxo:
             self._quadros_sem_alvo = 0
         if self._prazo_fila is not None:
             em_jogo = (partida or no_onibus) and not self.detector.fora_de_partida(quadro)
-            return self._confirmar_fila(quadro, agora, em_jogo)
+            return self._confirmar_fila(quadro, agora, em_jogo, hud_visivel, no_onibus)
+        self._botoes_fila_clicados.clear()
         if self._prazo_menu is not None:
             if agora >= self._prazo_menu:
                 self._prazo_menu = None
@@ -450,19 +489,19 @@ class Fluxo:
                 return Acao("menu_nao_encontrado")
             alvo = self._procurar(quadro, "voltar_lobby") or self._procurar(quadro, "menu_aba")
             if alvo:
-                return self._clicar_e_verificar(alvo, agora, quadro)
+                return self._clicar_e_verificar(alvo, quadro)
             self.confirmacao.limpar()
             return None
 
         if self._prazo_lobby is not None and agora < self._prazo_lobby:
             alvo = self.detector.ler_contexto(quadro, "confirmar_sair")
             if alvo:
-                return self._clicar_e_verificar(alvo, agora, quadro)
+                return self._clicar_e_verificar(alvo, quadro)
         alvo = self.detector.detectar(quadro)
         if alvo:
             self._sem_leitura_desde = None
             self._aviso_leitura = False
-            return self._clicar_e_verificar(alvo, agora, quadro)
+            return self._clicar_e_verificar(alvo, quadro)
 
         if self._prazo_lobby is not None and agora >= self._prazo_lobby:
             self._prazo_lobby = None
@@ -472,15 +511,19 @@ class Fluxo:
             self.inicio_partida = None
             self._sem_leitura_desde = None
             self._aviso_leitura = False
-            return self._clicar_e_verificar(alvo, agora, quadro)
+            return self._clicar_e_verificar(alvo, quadro)
         if self._prazo_lobby is not None or not partida:
             alvo = self._procurar(quadro, "aba_jogar")
             if alvo:
-                return self._clicar_e_verificar(alvo, agora, quadro)
+                return self._clicar_e_verificar(alvo, quadro)
         if self._prazo_lobby is not None:
             self.confirmacao.limpar()
             return None
         self.confirmacao.limpar()
+        if self._aguarda_hud_novo:
+            self._observar_transicao(hud_visivel, no_onibus)
+            no_onibus = no_onibus and (self._transicao_hud or not self._onibus_no_clique)
+            partida = partida and (self._transicao_hud or no_onibus)
         if partida or no_onibus:
             self._sem_leitura_desde = None
             self._aviso_leitura = False

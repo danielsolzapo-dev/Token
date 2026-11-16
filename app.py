@@ -68,15 +68,21 @@ def monitorar(windows, fluxo, eventos, parar):
             quadro = windows.capturar(janela) if janela else None
             pronto = janela is not None and windows.disponivel(janela, parar)
             if pronto:
-                partida = detector.em_partida(quadro)
+                hud_visivel = partida = detector.em_partida(quadro)
                 if partida and detector.procurar(quadro, ("espectador", "reinicializando"), 0.8):
                     partida = False
-                estado = "Em partida" if partida else "Procurando botões"
                 cursor = windows.cursor_visivel()
                 onibus = bool(detector.procurar(quadro, ("onibus",), 0.8))
                 contagem = fluxo.partidas
-                acao = fluxo.passo(quadro, time.monotonic(), partida=partida, cursor=cursor, no_onibus=onibus)
-                if acao and windows.executar(janela, acao, parar):
+                acao = fluxo.passo(quadro, time.monotonic(), partida=partida, cursor=cursor,
+                                   no_onibus=onibus, hud_visivel=hud_visivel)
+                estado = "Em partida" if partida and fluxo.inicio_partida is not None else "Procurando botões"
+                executada = acao is not None and windows.executar(janela, acao, parar)
+                if acao and acao.tipo == "clicar":
+                    fluxo.registrar_clique(acao, executada, time.monotonic(), no_onibus=onibus)
+                if fluxo.partidas != contagem:
+                    eventos.put(("total", fluxo.partidas))
+                if executada:
                     if acao.tipo == "clicar":
                         texto = "Clique enviado em " + ROTULOS.get(acao.alvo.nome, acao.alvo.nome)
                     else:
@@ -95,8 +101,6 @@ def monitorar(windows, fluxo, eventos, parar):
                     if texto != acao_anterior:
                         eventos.put(("acao", texto))
                         acao_anterior = texto
-                    if fluxo.partidas != contagem:
-                        eventos.put(("total", fluxo.partidas))
                 elif acao:
                     fluxo.pausar()
                     if not parar.is_set():
@@ -333,6 +337,24 @@ def verificar_build():
     confirmacao = detector.ler_contexto(cv2.cvtColor(np.asarray(modal), cv2.COLOR_RGB2BGR), "confirmar_sair")
     if confirmacao is None or not 300 < confirmacao.centro[0] < 420:
         raise RuntimeError("Falha na leitura do diálogo de saída.")
+    modal_ingles = Image.new("RGB", (960, 540), "#17263a")
+    desenho = ImageDraw.Draw(modal_ingles)
+    desenho.text((480, 162), "RETURN TO", font=fonte, anchor="mm")
+    desenho.text((480, 207), "LOBBY?", font=fonte, anchor="mm")
+    desenho.text((342, 332), "CONFIRM", font=fonte, anchor="mm")
+    desenho.text((612, 332), "CANCEL", font=fonte, anchor="mm")
+    confirmacao = detector.ler_contexto(cv2.cvtColor(np.asarray(modal_ingles), cv2.COLOR_RGB2BGR),
+                                       "confirmar_sair")
+    if confirmacao is None or not 300 < confirmacao.centro[0] < 400:
+        raise RuntimeError("Falha na leitura do diálogo com título em duas linhas.")
+    botao = Image.new("RGB", (960, 540), "#17263a")
+    desenho = ImageDraw.Draw(botao)
+    fonte_botao = ImageFont.truetype(str(Path(os.environ["WINDIR"]) / "Fonts" / "arialbd.ttf"), 23)
+    desenho.rectangle((600, 220, 849, 269), fill="#ffff00")
+    desenho.text((724, 245), "JOGAR   NOVAMENTE", font=fonte_botao, anchor="mm", fill="#101010")
+    alvo = detector.detectar(cv2.cvtColor(np.asarray(botao), cv2.COLOR_RGB2BGR))
+    if alvo is None or alvo.metodo != "cor" or not 650 < alvo.centro[0] < 790:
+        raise RuntimeError("Falha na leitura por cor e texto de Jogar Novamente.")
     windows = Windows()
     janela = tk.Tk()
     janela.withdraw()

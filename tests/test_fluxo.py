@@ -1,9 +1,13 @@
+from queue import SimpleQueue
 from threading import Event
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
-from logica_autofarm import Acao, Alvo, Config, Detector, Fluxo
+from app import monitorar
+from logica_autofarm import Acao, Alvo, Config, Detector, Fluxo, TEMPLATES
 from texto_tela import Linha, identificar
 from windows_game import Janela, Windows
 
@@ -12,7 +16,7 @@ class TelaSimulada:
     config = Config(minutos_partida=0.1, timeout_lobby=8, anti_afk=False)
     nome = None
 
-    def procurar(self, _, nomes):
+    def procurar(self, _, nomes, limiar=None):
         if self.nome in nomes:
             return Alvo(self.nome, 1, (10, 10, 20, 20), 1)
         return None
@@ -33,9 +37,12 @@ class FluxoTest(unittest.TestCase):
         self.fluxo = Fluxo(self.detector)
         self.quadro = np.zeros((540, 960, 3), dtype=np.uint8)
 
-    def passo(self, instante, nome=None, **kwargs):
+    def passo(self, instante, nome=None, *, enviado=True, **kwargs):
         self.detector.nome = nome
-        return self.fluxo.passo(self.quadro, instante, **kwargs)
+        acao = self.fluxo.passo(self.quadro, instante, **kwargs)
+        if acao and acao.tipo == "clicar":
+            self.fluxo.registrar_clique(acao, enviado, instante, no_onibus=kwargs.get("no_onibus", False))
+        return acao
 
     def iniciar_clique(self, nome):
         self.assertIsNone(self.passo(0, nome))
@@ -86,6 +93,44 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(3.2, partida=True).tipo, "partida_confirmada")
         self.assertEqual(self.fluxo.partidas, 1)
 
+    def test_hud_antigo_persistente_nao_conta_ou_inicia_cronometro(self):
+        self.assertIsNone(self.passo(0, "jogar", partida=True))
+        self.assertEqual(self.passo(0.2, "jogar", partida=True).tipo, "clicar")
+        self.assertIsNone(self.passo(2, partida=True))
+        self.assertEqual(self.passo(2.2, partida=True).tipo, "aguardando_fila")
+        self.assertIsNone(self.passo(3, partida=True))
+        self.assertIsNone(self.passo(3.2, partida=True))
+        self.assertEqual(self.fluxo.partidas, 0)
+        self.assertIsNone(self.fluxo.inicio_partida)
+        self.assertEqual(self.passo(11, partida=True).tipo, "partida_nao_confirmada")
+        self.assertIsNone(self.passo(11.2, partida=True))
+        self.assertIsNone(self.fluxo.inicio_partida)
+
+    def test_hud_so_confirma_depois_de_intervalo_sem_sinais(self):
+        self.iniciar_clique("jogar")
+        self.passo(2, partida=True)
+        self.passo(2.2, partida=True)
+        self.passo(3, hud_visivel=True)
+        self.passo(3.2, partida=True)
+        self.assertEqual(self.fluxo.partidas, 0)
+        self.passo(4)
+        self.passo(4.2)
+        self.assertIsNone(self.passo(5, partida=True))
+        self.assertEqual(self.passo(5.2, partida=True).tipo, "partida_confirmada")
+
+    def test_pronto_substitui_jogar_sem_esperar_timeout(self):
+        self.iniciar_clique("lobby_jogar")
+        self.passo(2, "lobby_pronto")
+        aviso = self.passo(2.2, "lobby_pronto")
+        self.assertEqual(aviso.tipo, "aguardando_fila")
+        self.assertIsNone(self.passo(2.5, "lobby_pronto"))
+        self.assertEqual(self.passo(2.7, "lobby_pronto").alvo.nome, "lobby_pronto")
+        self.passo(5, "lobby_jogar")
+        self.passo(5.2, "lobby_jogar")
+        self.assertIsNone(self.passo(5.5, "lobby_jogar"))
+        self.assertIsNone(self.passo(5.7, "lobby_jogar"))
+        self.assertEqual(self.fluxo.partidas, 0)
+
     def test_saida_por_tempo_e_confirmacao(self):
         self.assertIsNone(self.passo(0, partida=True))
         self.assertEqual(self.passo(6, partida=True).tipo, "esc")
@@ -129,6 +174,53 @@ class DetectorTest(unittest.TestCase):
         self.assertIs(identificar([titulo, sim, nao], 960, 540, "confirmar_sair"), sim)
         self.assertIsNone(identificar([sim, nao], 960, 540, "confirmar_sair"))
         self.assertIsNone(identificar([titulo, sim], 960, 540, "confirmar_sair"))
+
+    def test_modal_prefere_par_de_botoes_alinhado_ao_titulo(self):
+        linha1 = Linha("RETURN TO", (390, 170, 180, 25))
+        linha2 = Linha("LOBBY?", (425, 200, 110, 25))
+        fundo = Linha("RETURN TO LOBBY", (210, 255, 190, 25))
+        confirmar = Linha("CONFIRM", (305, 310, 110, 25))
+        cancelar = Linha("CANCEL", (555, 313, 110, 25))
+        linhas = [linha1, linha2, fundo, confirmar, cancelar]
+        self.assertIs(identificar(linhas, 960, 540, "confirmar_sair"), confirmar)
+        self.assertIsNone(identificar([linha1, linha2, fundo, cancelar], 960, 540, "confirmar_sair"))
+
+    def test_reune_palavras_proximas_sem_unir_controles_distantes(self):
+        jogar = Linha("JOGAR", (15, 10, 60, 23))
+        novamente = Linha("NOVAMENTE", (95, 10, 118, 23))
+        unido = identificar([jogar, novamente], 250, 50, "jogar")
+        self.assertEqual(unido.caixa, (15, 10, 198, 23))
+        separado = Linha("NOVAMENTE", (135, 10, 110, 23))
+        self.assertIsNone(identificar([jogar, separado], 250, 50, "jogar"))
+
+
+class MonitorTest(unittest.TestCase):
+    def test_cliques_recusados_pelo_windows_nao_consomem_tentativas(self):
+        detector = TelaSimulada()
+        detector.nome = "jogar"
+        detector.templates = dict.fromkeys(TEMPLATES)
+        detector.em_partida = lambda _: False
+        fluxo = Fluxo(detector)
+        parar = Event()
+        eventos = SimpleQueue()
+        quadro = np.zeros((540, 960, 3), dtype=np.uint8)
+        tentativas = []
+        instantes = iter(range(30))
+
+        def executar(janela, acao, sinal):
+            tentativas.append(acao.tentativa)
+            if len(tentativas) == 4:
+                sinal.set()
+            return False
+
+        windows = SimpleNamespace(
+            fortnite_em_foco=lambda: 42, capturar=lambda _: quadro.copy(),
+            disponivel=lambda *_: True, cursor_visivel=lambda: False, executar=executar,
+        )
+        with patch("app.time", SimpleNamespace(monotonic=lambda: next(instantes))):
+            monitorar(windows, fluxo, eventos, parar)
+        self.assertEqual(tentativas, [0, 0, 0, 0])
+        self.assertEqual(fluxo.partidas, 0)
 
 
 class WindowsTest(unittest.TestCase):

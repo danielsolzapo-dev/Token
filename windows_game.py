@@ -174,24 +174,19 @@ class Windows:
             if falha is not None:
                 raise falha
 
-    def _clique(self, janela, parar, duracao, alternativo=False):
+    def _clique(self, janela, parar, duracao):
         if not self.disponivel(janela, parar):
             return False
-        if alternativo:
-            self.user.mouse_event(2, 0, 0, 0, 0)
-        else:
-            self._mouse(2)
+        self._mouse(2)
         try:
-            return self._esperar(janela, parar, duracao)
+            self._esperar(janela, parar, duracao)
         finally:
-            if alternativo:
+            try:
+                self._mouse(4)
+            except OSError:
                 self.user.mouse_event(4, 0, 0, 0, 0)
-            else:
-                try:
-                    self._mouse(4)
-                except OSError:
-                    self.user.mouse_event(4, 0, 0, 0, 0)
-                    raise
+                raise
+        return True
 
     def executar(self, janela, acao, parar):
         if not self.disponivel(janela, parar):
@@ -216,7 +211,7 @@ class Windows:
                     or self.user.GetAncestor(self.user.WindowFromPoint(ponto), 2) != janela.hwnd
                     or self.fortnite_em_foco() != janela):
                 return False
-            return self._clique(janela, parar, 0.085, alternativo=bool(acao.tentativa % 2))
+            return self._clique(janela, parar, 0.15 if acao.tentativa % 2 else 0.085)
         if acao.tipo == "movimento":
             for tipo, *dados in acao.passos:
                 if tipo == "pausa":
