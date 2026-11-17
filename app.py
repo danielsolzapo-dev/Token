@@ -133,10 +133,12 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 bloqueio_hud = detector.procurar(quadro, ("espectador", "reinicializando"), 0.8)
                 if bloqueio_hud:
                     partida = False
-                cursor = windows.cursor_visivel() if not em_fundo else (
-                    fluxo.navegando_menu or (not partida and not bloqueio_hud)
-                    or bool(detector.procurar(quadro, ("menu_aba", "inventario")))
-                )
+                if em_fundo:
+                    contexto_jogo = partida or bloqueio_hud or fluxo.embarque.em_transicao(time.monotonic())
+                    cursor = (fluxo.navegando_menu or not contexto_jogo
+                              or bool(detector.procurar(quadro, ("menu_aba", "inventario"))))
+                else:
+                    cursor = windows.cursor_visivel()
                 lendo_menu = cursor and fluxo.navegando_menu
                 alvo_onibus, score_onibus = (None, 0.0) if lendo_menu else detector.aviso_onibus(quadro)
                 if parar.is_set():

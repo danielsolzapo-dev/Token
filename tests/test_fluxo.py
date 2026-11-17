@@ -776,6 +776,33 @@ class PainelTest(unittest.TestCase):
 
 
 class MonitorTest(unittest.TestCase):
+    def test_descida_em_segundo_plano_move_antes_do_hud(self):
+        detector = TelaSimulada()
+        detector.templates = dict.fromkeys(TEMPLATES)
+        detector.config = replace(detector.config, segundo_plano=True, anti_afk=True)
+        detector.em_partida = lambda _: False
+        fluxo = Fluxo(detector)
+        fluxo.embarque.registrar("saltar_onibus", True, 10)
+        parar = Event()
+        quadro = np.zeros((540, 960, 3), dtype=np.uint8)
+
+        def executar(janela, acao, sinal):
+            sinal.set()
+            return True
+
+        windows = Mock()
+        windows.localizar_fortnite.return_value = Janela(42, (0, 0, 960, 540), pid_fundo=15)
+        windows.capturar.return_value = quadro
+        windows.executar.side_effect = executar
+        with patch("app.time.monotonic", return_value=11):
+            monitorar(windows, fluxo, SimpleQueue(), parar)
+        windows.cursor_visivel.assert_not_called()
+        windows.executar.assert_called_once()
+        acao = windows.executar.call_args.args[1]
+        self.assertEqual(acao.tipo, "movimento_aereo")
+        self.assertEqual(acao.passos, (("teclas", (17,), 0.8),))
+        windows.fechar_captura_fundo.assert_called_once()
+
     def test_pausa_durante_ocr_abandona_quadro_antes_de_decidir(self):
         detector = TelaSimulada()
         detector.templates = dict.fromkeys(TEMPLATES)
