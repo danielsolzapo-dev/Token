@@ -35,7 +35,6 @@ ACOES_AEREAS = {
     "saltar_onibus": (("teclas", (57,), 0.16),),
     "fechar_asa": (("teclas", (57,), 0.16),),
 }
-TECLAS_PICARETA = {"F": 33, "1": 2, "Q": 16, "E": 18, "G": 34, "C": 46, "V": 47}
 DURACAO_CAMINHADA = 1.45
 
 
@@ -53,7 +52,6 @@ class Config:
     minutos_partida: float = 7.5
     anti_afk: bool = True
     rotina_aerea: bool = True
-    tecla_picareta: str = "F"
 
 
 @dataclass(frozen=True)
@@ -167,6 +165,8 @@ class Detector:
         regiao, _, _ = _roi(imagem, limites)
         if not regiao.size:
             return 1.0
+        if nome in AVISOS:
+            regiao = _branco(regiao)
         regiao = cv2.cvtColor(regiao, cv2.COLOR_BGR2GRAY)
         base = cv2.cvtColor(_resize(self.templates[nome], 0.5), cv2.COLOR_BGR2GRAY)
         escala, maior = min(escalas), max(escalas)
@@ -248,6 +248,19 @@ class Detector:
         margem = cv2.copyMakeBorder(ampliado, 20, 20, 20, 20, cv2.BORDER_CONSTANT,
                                     value=(255, 255, 255))
         return bool(self.ler_contexto(margem, "pronto_lobby"))
+
+    def aviso_onibus(self, quadro):
+        candidato = self.buscar_template(quadro, "onibus", 0.8)
+        score = candidato.score if candidato else 0.0
+        if score >= 0.8:
+            return candidato, score
+        if score >= 0.48:
+            recorte, _, _ = _roi(quadro, (0.46, 0.42, 0.90, 0.69))
+            ampliado = _resize(recorte, 1.5)
+            texto = self.ler_contexto(ampliado, "pular_onibus")
+            if texto:
+                return texto, score
+        return None, score
 
     def _ler_jogar_painel(self, quadro):
         regiao, x0, y0 = _roi(quadro, (0.55, 0.8, 0.98, 0.98))
@@ -446,7 +459,9 @@ class Fluxo:
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
         self._proxima_caminhada = 0.0
-        self._proxima_picareta = 0.0
+        self._proximo_clique_movimento = 0.0
+        self._voltas_caminhada = 0
+        self._onibus_visivel_no_clique = False
         self._movimento_exige_transicao = False
         self.motivo_anti_afk = "aguardando_hud"
         self.embarque = Embarque()
@@ -469,7 +484,8 @@ class Fluxo:
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
         self._proxima_caminhada = agora
-        self._proxima_picareta = agora
+        self._proximo_clique_movimento = agora
+        self._voltas_caminhada = 0
         self._inicio_hud_novo = None
         self._movimento_exige_transicao = False
 
@@ -483,6 +499,7 @@ class Fluxo:
             if self._pendente in BOTOES_FILA:
                 self._pendente, self._tentativas = None, 0
             self._movimento_exige_transicao = False
+            self._onibus_visivel_no_clique = False
             self._proxima_acao = 0.0
             self.pausar()
         self._fila_bloqueada = False
@@ -519,6 +536,7 @@ class Fluxo:
         if self._pendente in BOTOES_FILA:
             self._fila_bloqueada = True
             self._movimento_exige_transicao = True
+            self._onibus_visivel_no_clique = no_onibus
             self.embarque.reiniciar()
             self._botoes_fila_clicados.add(self._pendente)
             self._transicao_hud = False
@@ -647,26 +665,31 @@ class Fluxo:
             if self._prazo_fila is None:
                 self._inicio_hud_novo = None
         hud_visivel = partida if hud_visivel is None else hud_visivel
-        if self._pendente:
-            self.motivo_anti_afk = "verificando_clique"
-            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus, partida)
-        if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
-            self._quadros_sem_alvo += 1
-            if self._quadros_sem_alvo >= 2:
-                self._bloqueado = None
-        elif self._bloqueado:
-            self._quadros_sem_alvo = 0
-        aereo_autorizado = (self.embarque.saltou_em is not None or
-                            (self._prazo_fila is not None and (self._fila_contada or self._transicao_hud)))
-        if (self.config.rotina_aerea and aereo_autorizado and not espectando
+        onibus_novo = no_onibus and (not self._onibus_visivel_no_clique or self._transicao_hud)
+        aereo_autorizado = onibus_novo or self.embarque.saltou_em is not None
+        replay_na_tela = (no_onibus and self._pendente is None and self._prazo_fila is None
+                          and self._procurar(quadro, "jogar", "continuar"))
+        if (self.config.rotina_aerea and aereo_autorizado and not espectando and not replay_na_tela
                 and self._prazo_menu is None and self._prazo_lobby is None):
-            fase = self.embarque.observar(agora, onibus=no_onibus, asa=asa_delta)
+            fase = self.embarque.observar(agora, onibus=onibus_novo, asa=asa_delta)
             if fase:
                 self.motivo_anti_afk = "rotina_aerea"
                 self._proxima_acao = agora + 1
                 return Acao(fase, passos=ACOES_AEREAS[fase])
         else:
             self.embarque.pausar()
+        if onibus_novo and not replay_na_tela and self._pendente is None and self._prazo_fila is None:
+            self.motivo_anti_afk = "aviso_de_onibus"
+            return None
+        if self._pendente:
+            self.motivo_anti_afk = "verificando_clique"
+            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus, partida or onibus_novo)
+        if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
+            self._quadros_sem_alvo += 1
+            if self._quadros_sem_alvo >= 2:
+                self._bloqueado = None
+        elif self._bloqueado:
+            self._quadros_sem_alvo = 0
         if self._prazo_fila is not None:
             self.motivo_anti_afk = "aguardando_transicao_da_fila"
             em_jogo = partida
@@ -767,26 +790,20 @@ class Fluxo:
         camera_livre = not cursor and not transicao_aerea
         if agora >= self._proxima_caminhada:
             x, y, rumo = self._desvio
-            radianos = math.radians(rumo)
-            seno, cosseno = math.sin(radianos), math.cos(radianos)
-            frente, lateral = x * seno + y * cosseno, x * cosseno - y * seno
-            tecla = "W"
-            if frente > 1:
-                tecla = "A" if lateral > 0 else "D"
+            teclas = ("W", "WA", "W", "WD")[self._voltas_caminhada % 4]
+            self._voltas_caminhada += 1
             duracao = DURACAO_CAMINHADA
-            x, y = _andar(x, y, rumo, tecla, duracao)
-            codigos = (TECLAS[tecla],)
+            x, y = _andar(x, y, rumo, teclas, duracao)
+            codigos = tuple(TECLAS[tecla] for tecla in teclas)
             if camera_livre:
                 giro = self.rng.choice((-1, 1)) * self.rng.randint(350, 650)
                 passos = [("andar_mouse", codigos, duracao, giro, self.rng.randint(-65, 80))]
                 rumo = _angulo(rumo + giro * 0.03)
             else:
                 passos = [("teclas", codigos, duracao)]
-            picareta = TECLAS_PICARETA.get(self.config.tecla_picareta)
-            if camera_livre and picareta is not None and agora >= self._proxima_picareta:
-                passos += [("teclas", (picareta,), 0.10), ("pausa", 0.24),
-                           ("clique", 0.18), ("pausa", 0.16), ("clique", 0.18)]
-                self._proxima_picareta = agora + 5.0
+            if camera_livre and agora >= self._proximo_clique_movimento:
+                passos += [("clique", 0.18), ("pausa", 0.32), ("clique", 0.18)]
+                self._proximo_clique_movimento = agora + 5.0
             self._desvio = x, y, rumo
             self._proxima_caminhada = agora + 2.6
             total = sum(p[2] if p[0] in ("teclas", "andar_mouse") else p[-1] for p in passos)
@@ -871,7 +888,8 @@ def plano_anti_afk(desvio, camera=True, humor="andando", pular=True, *, rng=rand
             else:
                 duracao = min(1.4, max(0.1, rng.lognormvariate(math.log(0.45), 0.5)))
                 correr = False
-            teclas = _diagonal("W" if longa and camera else _direcao(x, y, rumo, rng), rng)
+            direcao = _direcao(x, y, rumo, rng)
+            teclas = _diagonal("W", rng) if direcao == "W" or longa and camera else "W" + direcao
             codigos = [TECLAS[t] for t in teclas] + [42] * correr
             if longa and camera:
                 if math.hypot(x, y) > 10:

@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from diagnostico import Diagnostico
-from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TECLAS_PICARETA, TEMPLATES
+from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
 from versao import VERSAO
 from windows_game import Windows
 
@@ -46,8 +46,6 @@ def carregar_config():
         minutos = dados.get("minutos_partida")
         if type(minutos) in (int, float) and 1 <= minutos <= 60:
             ajustes["minutos_partida"] = minutos
-        if dados.get("tecla_picareta") in ("", *TECLAS_PICARETA):
-            ajustes["tecla_picareta"] = dados["tecla_picareta"]
         return replace(padrao, **ajustes)
     except (OSError, ValueError):
         return padrao
@@ -57,8 +55,7 @@ def salvar_config(config):
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     provisoria = CONFIG.with_suffix(".tmp")
     dados = asdict(config)
-    provisoria.write_text(json.dumps({chave: dados[chave] for chave in (*CAMPOS, "tecla_picareta")}),
-                          encoding="utf-8")
+    provisoria.write_text(json.dumps({chave: dados[chave] for chave in CAMPOS}), encoding="utf-8")
     provisoria.replace(CONFIG)
 
 
@@ -94,7 +91,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 if bloqueio_hud:
                     partida = False
                 cursor = windows.cursor_visivel()
-                alvo_onibus = detector.procurar(quadro, ("onibus",), 0.8)
+                alvo_onibus, score_onibus = detector.aviso_onibus(quadro)
                 onibus = bool(alvo_onibus)
                 asa_delta = (fluxo.embarque.saltou_em is not None
                              and detector.procurar(quadro, ("asa_delta",), 0.8) is not None)
@@ -122,7 +119,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                           cursor=cursor, onibus=onibus, asa_delta=asa_delta,
                                           anti_afk=fluxo.motivo_anti_afk,
                                           bloqueio_hud=bloqueio_hud.nome if bloqueio_hud else None,
-                                          score_onibus=round(alvo_onibus.score, 3) if alvo_onibus else None,
+                                          score_onibus=round(score_onibus, 3),
+                                          metodo_onibus=alvo_onibus.metodo if alvo_onibus else None,
                                           resolucao=[quadro.shape[1], quadro.shape[0]])
                     leituras_anteriores, proximo_registro = leituras, agora + 10
                 if detector.dialogo_ambiguo and not dialogo_ambiguo_anterior:
@@ -240,12 +238,11 @@ class Painel:
         self.total = tk.StringVar(janela, "0")
         self.opcoes = {nome: tk.BooleanVar(janela, getattr(self.config, nome)) for nome in CAMPOS[:-1]}
         self.minutos = tk.StringVar(janela, f"{self.config.minutos_partida:g}".replace(".", ","))
-        self.tecla_picareta = tk.StringVar(janela, self.config.tecla_picareta or "Desligada")
 
         janela.title(f"Auto Farm · {VERSAO}")
         janela.configure(bg=BG)
-        janela.minsize(590, 577)
-        janela.geometry("650x605")
+        janela.minsize(590, 555)
+        janela.geometry("650x580")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         self.estilo()
         self.montar()
@@ -301,9 +298,6 @@ class Painel:
         ttk.Label(campo, text="Minutos por partida").pack(side="left", padx=(0, 10))
         ttk.Entry(campo, textvariable=self.minutos, width=7).pack(side="left", padx=(0, 8))
         ttk.Label(campo, text="1–60", style="Info.TLabel").pack(side="left")
-        ttk.Label(campo, text="Tecla da picareta").pack(side="left", padx=(20, 8))
-        ttk.Combobox(campo, textvariable=self.tecla_picareta, values=(*TECLAS_PICARETA, "Desligada"),
-                     state="readonly", width=10).pack(side="left")
         comandos = ttk.Frame(painel)
         comandos.pack(fill="x")
         self.botao = ttk.Button(comandos, text="Iniciar", style="Start.TButton", command=self.alternar)
@@ -331,8 +325,7 @@ class Painel:
         minutos = float(self.minutos.get().replace(",", "."))
         if not 1 <= minutos <= 60:
             raise ValueError("Informe um tempo de partida entre 1 e 60 minutos.")
-        tecla = self.tecla_picareta.get()
-        return replace(self.config, minutos_partida=minutos, tecla_picareta=tecla if tecla in TECLAS_PICARETA else "",
+        return replace(self.config, minutos_partida=minutos,
                        **{nome: var.get() for nome, var in self.opcoes.items()})
 
     def alternar(self):
@@ -466,6 +459,19 @@ def verificar_build():
     fluxo = Fluxo(detector)
     if fluxo.passo(quadro, 0) is not None or fluxo.passo(quadro.copy(), 0.3).alvo.nome != "lobby_jogar":
         raise RuntimeError("Falha na integração do fluxo de lobby.")
+    onibus = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    aviso = detector.templates["onibus"]
+    h, w = aviso.shape[:2]
+    onibus[550:550 + h, 1150:1150 + w] = aviso
+    reconhecido, score = detector.aviso_onibus(onibus)
+    if reconhecido is None or score < 0.8:
+        raise RuntimeError("Falha na leitura do aviso PARA PULAR.")
+    fluxo_no_onibus = Fluxo(detector)
+    if fluxo_no_onibus.passo(onibus, 0, no_onibus=True) is not None:
+        raise RuntimeError("O salto exigia dois quadros do aviso.")
+    salto = fluxo_no_onibus.passo(onibus.copy(), 0.3, no_onibus=True)
+    if salto is None or salto.passos != (("teclas", (57,), 0.16),):
+        raise RuntimeError("O salto precisa enviar somente Espaço, inclusive sem fila iniciada pelo app.")
     hud = np.zeros((540, 960, 3), dtype=np.uint8)
     hud[475:486, 32:105] = (0, 215, 145)
     if detector.em_partida(hud):

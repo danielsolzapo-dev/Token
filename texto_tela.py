@@ -53,6 +53,12 @@ def combinar(linhas, *, vertical=False):
 
 
 def identificar(linhas, largura, altura, tipo, *, sinalizar_ambiguidade=False):
+    if tipo == "pular_onibus":
+        rotulos = {"PARA PULAR", "ESPACO PARA PULAR", "SPACE PARA PULAR",
+                   "APERTE ESPACO PARA PULAR", "PRESSIONE ESPACO PARA PULAR",
+                   "TO JUMP", "SPACE TO JUMP", "PRESS SPACE TO JUMP",
+                   "PULAR DO ONIBUS", "JUMP FROM THE BUS"}
+        return next((linha for linha in combinar(linhas) if normalizar(linha.texto) in rotulos), None)
     if tipo == "pronto_lobby":
         rotulos = {normalizar(linha.texto): linha for linha in linhas}
         if any(texto == "ESC" or texto.startswith("ESC ") for texto in rotulos):

@@ -21,6 +21,9 @@ class TelaSimulada:
     config = Config(minutos_partida=0.1, timeout_lobby=8, anti_afk=False)
     nome = None
     dialogo_ambiguo = False
+
+    def aviso_onibus(self, quadro):
+        return None, 0.0
     inventario = False
 
     def procurar(self, _, nomes, limiar=None):
@@ -106,6 +109,21 @@ class FluxoTest(unittest.TestCase):
         fechar = self.passo(14, asa_delta=True)
         self.assertEqual(fechar.tipo, "fechar_asa")
         self.assertEqual(self.fluxo.partidas, 1)
+
+    def test_pula_com_espaco_ao_ligar_dentro_do_onibus_sem_fila_do_app(self):
+        self.assertIsNone(self.passo(0.2, no_onibus=True))
+        salto = self.passo(0.4, no_onibus=True)
+        self.assertEqual(salto.tipo, "saltar_onibus")
+        self.assertEqual(salto.passos, (("teclas", (57,), 0.16),))
+        self.fluxo.embarque.registrar(salto.tipo, True, 0.57)
+        self.assertIsNone(self.passo(2, no_onibus=True))
+
+    def test_aviso_do_onibus_prioriza_salto_enquanto_fila_sem_confirmacao(self):
+        self.iniciar_clique("lobby_jogar")
+        self.passo(2)
+        self.passo(2.2)
+        self.assertIsNone(self.passo(2.4, no_onibus=True))
+        self.assertEqual(self.passo(2.6, no_onibus=True).tipo, "saltar_onibus")
 
     def test_onibus_antigo_e_falha_isolada_de_leitura_nao_confirmam_partida(self):
                 self.assertIsNone(self.passo(0, "jogar", no_onibus=True))
@@ -337,25 +355,22 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(0.3, partida=True, cursor=True).passos, (("teclas", (17,), 1.45),))
         with patch("logica_autofarm.plano_anti_afk", return_value=([("mouse", 90, 0, 0.2)], (0, 0.8, 0))):
             self.assertEqual(self.passo(2, partida=True).passos, (("mouse", 90, 0, 0.2),))
-            self.assertEqual(self.passo(3, partida=True, cursor=True).passos, (("teclas", (17,), 1.45),))
+            self.assertEqual(self.passo(3, partida=True, cursor=True).passos, (("teclas", (17, 30), 1.45),))
 
-    def test_caminhada_gira_camera_e_equipa_picareta_antes_dos_cliques(self):
+    def test_caminhada_gira_camera_e_clica_com_item_atual(self):
         self.habilitar_movimento()
-        self.fluxo.config = replace(self.fluxo.config, tecla_picareta="1")
         self.assertIsNone(self.passo(0, partida=True))
         passos = self.passo(0.3, partida=True).passos
         self.assertEqual(passos[0][:3], ("andar_mouse", (17,), 1.45))
         self.assertNotEqual(passos[0][3], 0)
-        self.assertEqual(passos[1], ("teclas", (2,), 0.10))
-        self.assertEqual([p for p in passos if p[0] == "clique"], [("clique", 0.18)] * 2)
+        self.assertEqual(passos[1:], (("clique", 0.18), ("pausa", 0.32), ("clique", 0.18)))
 
-    def test_picareta_desligada_preserva_movimento_de_camera(self):
+    def test_caminhadas_programadas_mantem_w_em_todas_as_rodadas(self):
         self.habilitar_movimento()
-        self.fluxo.config = replace(self.fluxo.config, tecla_picareta="")
         self.assertIsNone(self.passo(0, partida=True))
-        passos = self.passo(0.3, partida=True).passos
-        self.assertEqual(len(passos), 1)
-        self.assertEqual(passos[0][0], "andar_mouse")
+        for agora, teclas in ((0.3, (17,)), (3.1, (17, 30)), (5.9, (17,)), (8.7, (17, 32))):
+            self.assertEqual(self.passo(agora, partida=True, cursor=True).passos,
+                             (("teclas", teclas, 1.45),))
 
     def test_hud_durante_queda_livre_nunca_dispara_caminhada_para_tras(self):
         self.habilitar_movimento()
@@ -363,7 +378,7 @@ class FluxoTest(unittest.TestCase):
         self.fluxo._desvio = (0, 2, 0)
         self.assertIsNone(self.passo(0.8, partida=True, asa_delta=False))
         acao = self.passo(1.2, partida=True, asa_delta=False)
-        self.assertEqual(acao.passos, (("teclas", (32,), 1.45),))
+        self.assertEqual(acao.passos, (("teclas", (17,), 1.45),))
 
     def test_perda_de_foco_exige_hud_reconfirmado_para_mover(self):
         self.habilitar_movimento()

@@ -61,6 +61,12 @@ class LeituraDiagnosticoTest(unittest.TestCase):
         self.assertIsNone(identificar([esc, pronto], 140, 35, "pronto_lobby"))
         self.assertIsNone(identificar([Linha("NÃO PRONTO", (28, 3, 90, 20))], 140, 35, "pronto_lobby"))
 
+    def test_le_aviso_do_onibus_com_texto_do_template(self):
+        aviso = Linha("ESPAÇO PARA PULAR", (32, 8, 163, 24))
+        self.assertEqual(identificar([aviso], 300, 90, "pular_onibus"), aviso)
+        outro = Linha("ESPAÇO PARA ABRIR ASA-DELTA", (32, 8, 240, 24))
+        self.assertIsNone(identificar([outro], 300, 90, "pular_onibus"))
+
     def test_barras_do_esquadrao_exigem_pares_acima_do_hud_proprio(self):
         quadro = np.zeros((860, 1440, 3), dtype=np.uint8)
         for y in (680, 720):
