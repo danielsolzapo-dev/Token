@@ -15,14 +15,16 @@ import webbrowser
 
 import cv2
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageGrab, ImageTk
 
 from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao,
                          criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
 from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from regiao import MANHA, NOITE, regiao_por_horario
 from relogio_painel import RelogioPainel
 from versao import VERSAO
+from webhook import ErroWebhook, enviar_webhook, validar_url
 from windows_game import Windows
 
 
@@ -37,8 +39,9 @@ FUNDO_METRICA = "#10141c"
 TEXTO_METRICA = "#ffe600"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
-CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
-          "atualizar_auto", "minutos_partida")
+OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
+          "atualizar_auto", "resgatar_recompensas", "regiao_auto")
+CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
     "lobby_pronto": "Pronto", "menu_aba": "Abrir menu", "voltar_lobby": "Voltar ao lobby",
@@ -52,7 +55,12 @@ def carregar_config():
         dados = json.loads(CONFIG.read_text(encoding="utf-8"))
         if not isinstance(dados, dict):
             return padrao
-        ajustes = {chave: dados[chave] for chave in CAMPOS[:-1] if type(dados.get(chave)) is bool}
+        ajustes = {chave: dados[chave] for chave in OPCOES if type(dados.get(chave)) is bool}
+        if isinstance(dados.get("webhook_url"), str):
+            ajustes["webhook_url"] = dados["webhook_url"]
+        for chave, permitido in (("regiao_manha", MANHA), ("regiao_noite", NOITE)):
+            if dados.get(chave) in permitido:
+                ajustes[chave] = dados[chave]
         minutos = dados.get("minutos_partida")
         if type(minutos) in (int, float) and 1 <= minutos <= 60:
             ajustes["minutos_partida"] = minutos
@@ -76,6 +84,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     proximo_registro = 0.0
     ultimo_tipo = None
     ordem = 0
+    captura_resgate = None
     prazo_anterior = fluxo.prazo_saida
     eventos.put(("prazo_saida", prazo_anterior))
     proximo_esquadrao = 0.0
@@ -154,9 +163,11 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                           "Procurando botões")
                 if fluxo.motivo_anti_afk == "aguardando_transicao_da_fila":
                     estado = "Aguardando transição da fila"
+                elif fluxo.motivo_anti_afk == "ajustando_regiao":
+                    estado = f"Ajustando região · {fluxo.regiao.alvo}" if fluxo.regiao.alvo else "Voltando ao lobby"
                 elif partida and contagem_esquadrao:
                     estado = f"Em partida · {contagem_esquadrao} no HUD do esquadrão"
-                tem_entrada = acao is not None and (bool(acao.passos) or acao.tipo in ("clicar", "esc"))
+                tem_entrada = acao is not None and (bool(acao.passos) or acao.tipo in ("clicar", "esc", "apontar"))
                 if diagnostico and acao and (tem_entrada or acao.tipo != ultimo_tipo):
                     ordem += 1
                     diagnostico.registrar("acao", id=ordem, tipo=acao.tipo,
@@ -170,8 +181,17 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     motivo = None if executada else windows.motivo_interrupcao(janela, parar)
                     diagnostico.registrar("resultado_entrada", id=ordem,
                                           resultado="enviada" if executada else "interrompida", motivo=motivo)
-                if acao and acao.tipo == "clicar":
+                if acao and acao.tipo == "clicar" and not acao.alvo.nome.startswith("regiao_"):
                     fluxo.registrar_clique(acao, executada, time.monotonic(), no_onibus=onibus)
+                    if executada and acao.alvo.nome == "resgatar":
+                        url = fluxo.config.webhook_url
+                        captura_resgate = (url, acao.alvo.item, quadro) if url else None
+                elif acao and acao.tipo == "resgate_confirmado":
+                    if captura_resgate:
+                        eventos.put(("resgate_webhook", captura_resgate))
+                    captura_resgate = None
+                elif acao and acao.tipo == "clique_ignorado" and acao.alvo.nome == "resgatar":
+                    captura_resgate = None
                 elif acao and (acao.tipo in ACOES_AEREAS or acao.tipo == "movimento_aereo"):
                     fluxo.embarque.registrar(acao.tipo, executada, time.monotonic())
                 if fluxo.partidas != contagem:
@@ -184,7 +204,12 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                         diagnostico.registrar("cronometro_saida", segundos_restantes=segundos)
                     prazo_anterior = prazo_saida
                 if executada:
-                    if acao.tipo == "clicar":
+                    if acao.tipo.startswith("regiao_"):
+                        texto = (f"Região confirmada · {acao.alvo.nome}." if acao.tipo == "regiao_ok" else
+                                 f"A região {acao.alvo.nome} não foi confirmada. Nova tentativa em 20 min.")
+                    elif acao.alvo and acao.alvo.nome.startswith("regiao_"):
+                        texto = "Verificando região de pareamento…"
+                    elif acao.tipo == "clicar":
                         texto = "Clique enviado em " + ROTULOS.get(acao.alvo.nome, acao.alvo.nome)
                     elif acao.tipo in ("movimento", "movimento_aereo"):
                         teclas = [nome for nome, scan in TECLAS.items()
@@ -203,6 +228,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                             "fechar_asa": "Espaço enviado após confirmar Entrar em queda livre.",
                             "movimento_menu": "Anti-AFK aguardando fechar o menu de saída.",
                             "clique_confirmado": "Botão saiu da tela",
+                            "resgate_confirmado": "Recompensa resgatada.",
                             "clique_ignorado": "Botão continua visível após três tentativas",
                             "menu_nao_encontrado": "Menu de saída não encontrado. Tentando de novo em instantes.",
                             "lobby_nao_encontrado": "Lobby não encontrado. Confira se o jogo pede confirmação.",
@@ -272,13 +298,17 @@ class Painel:
         self.farmando = tk.StringVar(janela, "—")
         self.relogio = RelogioPainel()
         self.status_atualizacao = tk.StringVar(janela, f"Versão {VERSAO}")
-        self.opcoes = {nome: tk.BooleanVar(janela, getattr(self.config, nome)) for nome in CAMPOS[:-1]}
+        self.opcoes = {nome: tk.BooleanVar(janela, getattr(self.config, nome)) for nome in OPCOES}
         self.minutos = tk.StringVar(janela, f"{self.config.minutos_partida:g}".replace(".", ","))
+        self.status_webhook = tk.StringVar(janela, "Webhook configurado." if self.config.webhook_url else "")
+        self.janela_webhook = self.botao_teste_webhook = None
+        self.janela_regiao = None
+        self.teste_webhook_em_curso = False
 
         janela.title(f"Auto Farm · {VERSAO}")
         janela.configure(bg=BG)
-        janela.minsize(590, 650)
-        janela.geometry("650x675")
+        janela.minsize(590, 690)
+        janela.geometry("650x710")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         self.estilo()
         self.montar()
@@ -313,11 +343,11 @@ class Painel:
         estilo.map("Start.TButton", background=[("active", "#cbe58f")])
 
     def montar(self):
-        painel = ttk.Frame(self.janela, padding=(28, 24, 28, 20))
+        painel = ttk.Frame(self.janela, padding=(28, 20, 28, 14))
         painel.pack(fill="both", expand=True)
         ttk.Label(painel, text="Auto Farm", style="Titulo.TLabel").pack(anchor="w")
         ttk.Label(painel, text="Fortnite · Fila, saída por tempo e movimento",
-                  style="Info.TLabel").pack(anchor="w", pady=(0, 18))
+                  style="Info.TLabel").pack(anchor="w", pady=(0, 13))
         resumo = ttk.Frame(painel, style="Card.TFrame", padding=(16, 12))
         resumo.pack(fill="x")
         ttk.Label(resumo, textvariable=self.status, style="Status.TLabel", wraplength=485).pack(anchor="w")
@@ -343,9 +373,9 @@ class Painel:
             ("rotina_aerea", "Saltar e fechar a asa-delta com Espaço"),
             ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
         ):
-            ttk.Checkbutton(painel, text=texto, variable=self.opcoes[nome]).pack(anchor="w", pady=(10, 0))
+            ttk.Checkbutton(painel, text=texto, variable=self.opcoes[nome]).pack(anchor="w", pady=(8, 0))
         campo = ttk.Frame(painel)
-        campo.pack(anchor="w", pady=(10, 16))
+        campo.pack(anchor="w", pady=(10, 14))
         ttk.Label(campo, text="Minutos por partida").pack(side="left", padx=(0, 10))
         ttk.Entry(campo, textvariable=self.minutos, width=7).pack(side="left", padx=(0, 8))
         ttk.Label(campo, text="1–60", style="Info.TLabel").pack(side="left")
@@ -366,6 +396,143 @@ class Painel:
         self.botao_atualizacao.pack(side="right")
         ttk.Label(painel, textvariable=self.status_atualizacao, style="Info.TLabel",
                   wraplength=515).pack(anchor="w", pady=(4, 0))
+        recompensas = ttk.Frame(painel)
+        recompensas.pack(fill="x", pady=(10, 0))
+        ttk.Button(recompensas, text="Recompensas e webhook", command=self.mostrar_webhook).pack(side="left")
+        ttk.Button(recompensas, text="Regiões por horário", command=self.mostrar_regiao).pack(side="right")
+        ttk.Label(recompensas, textvariable=self.status_webhook, style="Info.TLabel",
+                  wraplength=200).pack(side="left", padx=10)
+
+    def mostrar_regiao(self):
+        if self.janela_regiao and self.janela_regiao.winfo_exists():
+            self.janela_regiao.lift()
+            return
+        janela = self.janela_regiao = tk.Toplevel(self.janela)
+        janela.title("Regiões por horário")
+        janela.transient(self.janela)
+        painel = ttk.Frame(janela, padding=20)
+        painel.pack(fill="both", expand=True)
+        ativar = tk.BooleanVar(janela, self.config.regiao_auto)
+        manha = tk.StringVar(janela, self.config.regiao_manha)
+        noite = tk.StringVar(janela, self.config.regiao_noite)
+        estado = tk.StringVar(janela)
+        ttk.Checkbutton(painel, text="Ajustar a região antes de entrar na fila", variable=ativar).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        ttk.Label(painel, text="Horário de Brasília · Construção e Zero Build", style="Info.TLabel").grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        for linha, (faixa, controle) in enumerate((
+            ("00h–06h", ttk.Label(painel, text="NA-Oeste")),
+            ("06h–11h", ttk.Combobox(painel, values=MANHA, textvariable=manha, state="readonly")),
+            ("11h–18h", ttk.Label(painel, text="Europa")),
+            ("18h–00h", ttk.Combobox(painel, values=NOITE, textvariable=noite, state="readonly")),
+        ), 2):
+            ttk.Label(painel, text=faixa).grid(row=linha, column=0, sticky="w", padx=(0, 24), pady=3)
+            controle.grid(row=linha, column=1, sticky="w", pady=3)
+        ttk.Button(painel, text="Salvar", command=lambda: self.salvar_regiao(
+            ativar.get(), manha.get(), noite.get(), estado)).grid(row=6, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(painel, textvariable=estado, style="Info.TLabel").grid(
+            row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+    def salvar_regiao(self, ativar, manha, noite, estado):
+        alteracoes = {"regiao_auto": ativar, "regiao_manha": manha, "regiao_noite": noite}
+        config = replace(self.config, **alteracoes)
+        try:
+            salvar_config(config)
+        except OSError:
+            estado.set("Não foi possível salvar a programação.")
+            return
+        self.config = config
+        self.opcoes["regiao_auto"].set(ativar)
+        if self.fluxo is not None:
+            self.fluxo.config = replace(self.fluxo.config, **alteracoes)
+        estado.set(f"Região prevista agora: {regiao_por_horario(manha, noite)}." if ativar else
+                   "Região automática desativada.")
+
+    def mostrar_webhook(self):
+        if self.janela_webhook and self.janela_webhook.winfo_exists():
+            self.janela_webhook.lift()
+            return
+        janela = self.janela_webhook = tk.Toplevel(self.janela)
+        janela.title("Recompensas e webhook")
+        janela.transient(self.janela)
+        painel = ttk.Frame(janela, padding=20)
+        painel.pack(fill="both", expand=True)
+        resgatar = tk.BooleanVar(janela, self.config.resgatar_recompensas)
+        url = tk.StringVar(janela, self.config.webhook_url)
+        item = tk.StringVar(janela, "Picareta de teste")
+        mensagem = tk.StringVar(janela, "Este é um teste do Auto Farm.")
+        ttk.Checkbutton(painel, text="Resgatar recompensas automaticamente no lobby",
+                        variable=resgatar).pack(anchor="w")
+        ttk.Label(painel, text="URL do webhook (Discord ou compatível)").pack(anchor="w", pady=(12, 2))
+        entrada = ttk.Entry(painel, textvariable=url, width=62, show="•")
+        entrada.pack(fill="x")
+        ttk.Label(painel, text="Nome do item de teste").pack(anchor="w", pady=(12, 2))
+        ttk.Entry(painel, textvariable=item).pack(fill="x")
+        ttk.Label(painel, text="Mensagem de teste").pack(anchor="w", pady=(12, 2))
+        ttk.Entry(painel, textvariable=mensagem).pack(fill="x")
+        comandos = ttk.Frame(painel)
+        comandos.pack(fill="x", pady=(12, 6))
+        ttk.Button(comandos, text="Salvar", command=lambda: self.salvar_webhook(url.get(), resgatar.get())).pack(side="left")
+        self.botao_teste_webhook = ttk.Button(
+            comandos, text="Testar com tela atual",
+            command=lambda: self.testar_webhook(url.get(), item.get(), mensagem.get())
+        )
+        self.botao_teste_webhook.pack(side="left", padx=8)
+        if self.teste_webhook_em_curso:
+            self.botao_teste_webhook.state(["disabled"])
+        ttk.Label(painel, text="O teste captura a tela em 3 segundos. Deixe visível o que quer enviar.",
+                  style="Info.TLabel", wraplength=440).pack(anchor="w")
+        ttk.Label(painel, textvariable=self.status_webhook, style="Info.TLabel",
+                  wraplength=440).pack(anchor="w", pady=(6, 0))
+
+    def salvar_webhook(self, url, resgatar):
+        url = url.strip()
+        config = replace(self.config, webhook_url=url, resgatar_recompensas=resgatar)
+        try:
+            if url:
+                validar_url(url)
+            salvar_config(config)
+        except ErroWebhook as erro:
+            self.status_webhook.set(str(erro))
+            return
+        except OSError:
+            self.status_webhook.set("Não foi possível salvar o webhook.")
+            return
+        self.config = config
+        self.opcoes["resgatar_recompensas"].set(resgatar)
+        if self.fluxo is not None:
+            self.fluxo.config = replace(self.fluxo.config, webhook_url=url, resgatar_recompensas=resgatar)
+        self.status_webhook.set("Webhook salvo." if url else "Envio de webhook desativado.")
+
+    def testar_webhook(self, url, nome, mensagem):
+        try:
+            validar_url(url)
+        except ErroWebhook as erro:
+            self.status_webhook.set(str(erro))
+            return
+        self.teste_webhook_em_curso = True
+        self.botao_teste_webhook.state(["disabled"])
+        self.status_webhook.set("Capturando a tela em 3 segundos…")
+        self.janela.after(3000, lambda: self.iniciar_envio_webhook(
+            url, nome=nome.strip() or "Picareta de teste", teste=True, mensagem=mensagem))
+
+    def iniciar_envio_webhook(self, url, nome, quadro=None, *, teste=False, mensagem=""):
+        Thread(target=self._enviar_webhook, args=(url, nome, quadro, teste, mensagem), daemon=True).start()
+
+    def _enviar_webhook(self, url, nome, quadro, teste, mensagem):
+        try:
+            if quadro is None:
+                jogo = self.windows.fortnite_em_foco()
+                quadro = (self.windows.capturar(jogo) if jogo else
+                          cv2.cvtColor(np.asarray(ImageGrab.grab().convert("RGB")), cv2.COLOR_RGB2BGR))
+            enviar_webhook(url, quadro, nome, teste=teste, texto_teste=mensagem)
+            texto = "Teste enviado." if teste else "Recompensa enviada ao webhook."
+            sucesso = True
+        except ErroWebhook as erro:
+            texto, sucesso = str(erro), False
+        except (OSError, ValueError, cv2.error):
+            texto, sucesso = "Não foi possível capturar ou enviar a tela.", False
+        self.eventos.put(("resultado_webhook", (teste, sucesso, texto)))
 
     def salvar_preferencia_atualizacao(self):
         self.config = replace(self.config, atualizar_auto=self.opcoes["atualizar_auto"].get())
@@ -626,6 +793,19 @@ class Painel:
                 self.total.set(str(valor))
             elif evento == "prazo_saida":
                 self.relogio.prazo_saida = valor
+            elif evento == "resgate_webhook":
+                url, nome, quadro = valor
+                if url == self.config.webhook_url:
+                    self.iniciar_envio_webhook(url, nome, quadro)
+            elif evento == "resultado_webhook":
+                teste, sucesso, texto = valor
+                if teste:
+                    self.teste_webhook_em_curso = False
+                    if self.botao_teste_webhook and self.botao_teste_webhook.winfo_exists():
+                        self.botao_teste_webhook.state(["!disabled"])
+                self.status_webhook.set(texto)
+                if self.diagnostico:
+                    self.diagnostico.registrar("webhook", teste=teste, enviado=sucesso, resultado=texto)
             elif evento == "erro" or (evento == "acao" and self.parar is not None and not self.parar.is_set()):
                 self.atividade.set(valor)
         self.atualizar_pausa()

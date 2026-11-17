@@ -30,6 +30,10 @@ O tempo padrão é 7,5 minutos. O painel sinaliza modo espectador e registra par
 
 **Atualizar automaticamente** consulta as releases do GitHub ao abrir e a cada hora. Quando o app fica pausado, o atualizador valida o tamanho e o SHA-256 do executável, guarda a versão anterior como `.previous` e reinicia o app. Use **Verificar** para consultar manualmente.
 
+Em **Recompensas e webhook**, você pode ativar o resgate quando a tela de itens adquiridos aparecer antes de uma nova fila. Cole a URL HTTPS do Discord ou de um endpoint compatível com seus anexos e clique em **Salvar**. Depois que o botão de resgate some, o app envia a captura do Fortnite feita antes do clique e o nome lido na tela. Se o nome estiver ilegível, o aviso informa isso e envia a captura. **Testar com tela atual** aguarda três segundos e envia a imagem do Fortnite em primeiro plano ou do monitor principal, com o nome de teste escolhido. [Formato do webhook do Discord](https://docs.discord.com/developers/resources/webhook#execute-webhook)
+
+Em **Regiões por horário**, ative a programação para Construção e Zero Build. O app usa Brasília (UTC−3) e tenta ajustar a região antes de entrar na fila pelo lobby. Das 00h às 06h, usa NA-Oeste. Das 06h às 11h, você pode escolher Ásia ou Oceania. Das 11h às 18h, usa Europa. Das 18h à meia-noite, você pode escolher Brasil, NA-Leste ou NA-Central. As preferências da América do Norte usam a subregião quando essa opção aparece no jogo. [Configurações de pareamento da Epic](https://www.epicgames.com/help/c-ategory_fortnite/c-fortnite_gameplay/a10221394)
+
 ## Enviar um diagnóstico
 
 1. Reproduza a falha e pressione **F7**. Isso marca o horário no registro da sessão.

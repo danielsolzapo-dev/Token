@@ -27,6 +27,10 @@ class TelaSimulada:
 
     def aviso_asa(self, quadro):
         return None, 0.0
+
+    def recompensa(self, quadro):
+        alvo = self.procurar(quadro, ("resgatar",))
+        return replace(alvo, item="Picareta Ártica") if alvo else None
     inventario = False
 
     def procurar(self, _, nomes, limiar=None):
@@ -368,6 +372,19 @@ class FluxoTest(unittest.TestCase):
         self.assertIsNone(self.passo(9.5, "confirmar_sair"))
         self.assertEqual(self.passo(9.8, "confirmar_sair").alvo.nome, "confirmar_sair")
         self.assertEqual(self.fluxo.partidas, 0)
+
+    def test_resgate_verificado_antes_de_entrar_em_nova_fila(self):
+        self.fluxo._prazo_lobby = 90
+        self.assertIsNone(self.passo(0, "resgatar", cursor=True))
+        clique = self.passo(0.3, "resgatar", cursor=True)
+        self.assertEqual(clique.alvo.item, "Picareta Ártica")
+        tentativa = self.passo(2, "resgatar", cursor=True)
+        self.assertEqual(tentativa.tipo, "clicar")
+        self.assertEqual(tentativa.tentativa, 1)
+        self.assertIsNone(self.passo(3.7, "lobby_jogar", cursor=True))
+        self.assertEqual(self.passo(4, "lobby_jogar", cursor=True).tipo, "resgate_confirmado")
+        self.assertIsNone(self.passo(4.3, "lobby_jogar", cursor=True))
+        self.assertEqual(self.passo(4.6, "lobby_jogar", cursor=True).alvo.nome, "lobby_jogar")
 
     def test_ambiguidade_impede_repetir_clique_no_menu_de_fundo(self):
         self.passo(0, partida=True)

@@ -1,6 +1,7 @@
 """State machine and screen detector for the independent Auto Farm app."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from difflib import SequenceMatcher
 import math
 from pathlib import Path
 import random
@@ -9,6 +10,7 @@ import cv2
 import numpy as np
 
 from embarque import Embarque
+from regiao import MANHA, NOITE, RegiaoLobby, ler_tela_regiao, regiao_por_horario
 
 
 # Nome do PNG, região de busca (x0, y0, x1, y1) e fator de trabalho em 1080p.
@@ -21,6 +23,8 @@ TEMPLATES = {
     "lobby_jogar": ("lobby_jogar.png", (0, 0.6, 0.4, 1), 0.5),
     "lobby_pronto": ("lobby_pronto.png", (0, 0.6, 0.4, 1), 0.5),
     "resgatar": ("resgatar.png", (0.25, 0.7, 0.75, 1), 0.5),
+    "engrenagem_lobby": ("engrenagem_lobby.png", (0.64, 0, 0.93, 0.90), 1.0),
+    "seta_regiao": ("seta_regiao.png", (0, 0, 1, 1), 1.0),
     "espectador": ("espectador.png", (0.3, 0, 0.7, 0.12), 1.0),
     "inventario": ("inventario.png", (0.65, 0.82, 1, 1), 1.0),
     "aba_jogar": ("aba_jogar.png", (0, 0, 0.3, 0.12), 1.0),
@@ -56,6 +60,11 @@ class Config:
     anti_afk: bool = True
     rotina_aerea: bool = True
     atualizar_auto: bool = True
+    resgatar_recompensas: bool = True
+    webhook_url: str = field(default="", repr=False)
+    regiao_auto: bool = False
+    regiao_manha: str = MANHA[0]
+    regiao_noite: str = NOITE[0]
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,7 @@ class Alvo:
     caixa: tuple[int, int, int, int]
     escala: float | None
     metodo: str = "template"
+    item: str | None = None
 
     @property
     def centro(self):
@@ -121,6 +131,7 @@ class Detector:
         self.leitor = leitor
         self._ultimo_texto = None
         self._recorte_avisos = None
+        self._cache_recompensa = None
         self.dialogo_ambiguo = False
         pasta = Path(pasta) if pasta else Path(__file__).with_name("templates")
         self.templates = {}
@@ -134,6 +145,8 @@ class Detector:
                 imagem = cv2.imdecode(np.frombuffer(caminho.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
                 if imagem is not None:
                     imagem = _resize(imagem, fator)
+                    if nome == "engrenagem_lobby":
+                        imagem = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
                     self.templates[nome] = _branco(imagem) if nome in AVISOS else imagem
 
     def preparar(self, quadro, fator_trabalho=0.5):
@@ -173,7 +186,9 @@ class Detector:
         if nome in AVISOS:
             regiao = _branco(regiao)
         regiao = cv2.cvtColor(regiao, cv2.COLOR_BGR2GRAY)
-        base = cv2.cvtColor(_resize(self.templates[nome], 0.5), cv2.COLOR_BGR2GRAY)
+        base = _resize(self.templates[nome], 0.5)
+        if base.ndim == 3:
+            base = cv2.cvtColor(base, cv2.COLOR_BGR2GRAY)
         escala, maior = min(escalas), max(escalas)
         melhor_score, estimativa = -1.0, 1.0
         while escala <= maior + 1e-6:
@@ -192,6 +207,8 @@ class Detector:
         regiao, x0, y0 = _roi(imagem, limites)
         if nome in AVISOS:
             regiao = _branco(regiao)
+        elif nome == "engrenagem_lobby":
+            regiao = cv2.cvtColor(regiao, cv2.COLOR_BGR2GRAY)
         escalas = self.escalas()
         ultima = self.ultima_escala.get(nome)
         melhor = None
@@ -259,6 +276,56 @@ class Detector:
 
     def aviso_asa(self, quadro):
         return self._aviso_aereo(quadro, "asa_delta", "fechar_asa")
+
+    def recompensa(self, quadro):
+        if self._cache_recompensa is not None and self._cache_recompensa[0] is quadro:
+            return self._cache_recompensa[1]
+        recorte = quadro[:round(quadro.shape[0] * 0.42)]
+        alvo = None
+        if self.ler_contexto(recorte, "cabecalho_recompensa"):
+            botao = self.ler_contexto(quadro, "recompensa")
+            if botao:
+                titulo = self.leitor.ler(quadro, "nome_recompensa")
+                alvo = replace(botao, nome="resgatar", item=titulo.texto if titulo else None)
+        self._cache_recompensa = quadro, alvo
+        return alvo
+
+    def tela_regiao(self, quadro):
+        altura, largura = quadro.shape[:2]
+        tela = ler_tela_regiao(self._carregar_leitor().linhas(quadro), largura, altura)
+        if tela.social and not tela.engrenagem:
+            gear = self.buscar_template(quadro, "engrenagem_lobby", 0.83)
+            if gear and gear.score >= 0.83:
+                tela = replace(tela, engrenagem=gear.caixa)
+        return replace(tela, pareamento=self._setas_regiao(quadro, tela.pareamento),
+                       subregiao=self._setas_regiao(quadro, tela.subregiao))
+
+    def _setas_regiao(self, quadro, linha):
+        if linha is None or "seta_regiao" not in self.templates:
+            return linha
+        altura, largura = quadro.shape[:2]
+        x, y, w, h = linha.caixa
+        cy = y + h / 2
+        topo, base = round(cy - 0.022 * altura), round(cy + 0.022 * altura)
+        template = _branco(self.templates["seta_regiao"])
+
+        def procurar(ini, fim, modelo):
+            if ini >= fim:
+                return None
+            recorte = _branco(quadro[topo:base, ini:fim])
+            melhor = None
+            for escala in (0.70, 0.80, 0.90, 1, 1.1, 1.2):
+                alvo = _resize(modelo, altura / 1080 * escala)
+                score, (px, py) = self._comparar(recorte, alvo)
+                if score >= 0.83 and (melhor is None or score > melhor[0]):
+                    melhor = score, (ini + px, topo + py, alvo.shape[1], alvo.shape[0])
+            return melhor[1] if melhor else None
+
+        centro = x + w / 2
+        direita = procurar(round(centro + 0.04 * largura), round(min(centro + 0.16 * largura, 0.68 * largura)), template)
+        esquerda = procurar(round(max(centro - 0.16 * largura, 0.29 * largura)),
+                            round(centro - 0.04 * largura), cv2.flip(template, 1))
+        return replace(linha, direita=direita, esquerda=esquerda)
 
     def _aviso_aereo(self, quadro, nome, tipo_texto):
         candidato = self.buscar_template(quadro, nome, 0.8)
@@ -396,15 +463,19 @@ class Detector:
             return self.procurar(quadro, ("continuar",))
         return None
 
-    def ler_contexto(self, quadro, tipo):
+    def _carregar_leitor(self):
         if self.leitor is None:
             from texto_tela import Reconhecedor
             self.leitor = Reconhecedor()
+        return self.leitor
+
+    def ler_contexto(self, quadro, tipo):
+        leitor = self._carregar_leitor()
         if self._ultimo_texto is not None:
             imagem, contexto, alvo = self._ultimo_texto
             if imagem is quadro and contexto == tipo:
                 return alvo
-        linha = self.leitor.ler(quadro, tipo)
+        linha = leitor.ler(quadro, tipo)
         if tipo == "confirmar_sair":
             self.dialogo_ambiguo = getattr(self.leitor, "dialogo_ambiguo", False)
         alvo = Alvo(tipo, 1.0, linha.caixa, None, "texto") if linha else None
@@ -475,6 +546,7 @@ class Fluxo:
         self._sem_leitura_desde = None
         self._aviso_leitura = False
         self._pendente = None
+        self._item_resgate = None
         self._tentativas = 0
         self._quadros_sem_alvo = 0
         self._bloqueado = None
@@ -491,6 +563,7 @@ class Fluxo:
         self._movimento_exige_transicao = False
         self.motivo_anti_afk = "aguardando_hud"
         self.embarque = Embarque()
+        self.regiao = RegiaoLobby()
 
     def pausar(self):
         self.confirmacao.limpar()
@@ -544,6 +617,8 @@ class Fluxo:
         return self.detector.procurar(quadro, nomes)
 
     def _alvo(self, quadro, nome):
+        if nome == "resgatar":
+            return self.detector.recompensa(quadro)
         if nome in ("jogar", "continuar"):
             alvo = self.detector.detectar(quadro)
             return alvo if alvo and alvo.nome == nome else None
@@ -568,6 +643,8 @@ class Fluxo:
         self._pendente = acao.alvo.nome
         self._tentativas += 1
         self._quadros_sem_alvo = 0
+        if self._pendente == "resgatar":
+            self._item_resgate = acao.alvo.item
         if self._pendente == "menu_aba" and self._prazo_menu is not None:
             self._prazo_menu = agora + 10
         if self._pendente in BOTOES_FILA:
@@ -600,6 +677,11 @@ class Fluxo:
         mudou_de_aba = nome == "menu_aba" and self._procurar(quadro, "voltar_lobby")
         alvo_sumiu = abriu_modal or mudou_de_aba or (partida and nome in BOTOES_LOBBY)
         alvo = None if alvo_sumiu else self._alvo(quadro, nome)
+        if nome == "resgatar" and alvo and self._item_resgate and alvo.item:
+            if SequenceMatcher(None, self._item_resgate.casefold(), alvo.item.casefold()).ratio() < 0.80:
+                alvo = None
+        if alvo:
+            self._quadros_sem_alvo = 0
         if nome in ("voltar_lobby", "confirmar_sair") and self.detector.dialogo_ambiguo:
             self._quadros_sem_alvo = 0
             return None
@@ -629,6 +711,9 @@ class Fluxo:
         elif nome == "voltar_lobby":
             self._prazo_menu = None
             self._prazo_lobby = agora + self.config.timeout_lobby
+        elif nome == "resgatar":
+            self._item_resgate = None
+            return Acao("resgate_confirmado")
         return Acao("clique_confirmado")
 
     def _encerrar_espera_fila(self):
@@ -695,6 +780,16 @@ class Fluxo:
         self.motivo_anti_afk = "movimento_aereo"
         return Acao("movimento_aereo", passos=(("teclas", codigos, 0.8),))
 
+    @staticmethod
+    def _acao_regiao(ordem, alvo):
+        if ordem is None:
+            return None
+        if ordem.caixa:
+            return Acao(ordem.tipo, Alvo(f"regiao_{ordem.etapa}", 1.0, ordem.caixa, None))
+        if ordem.tipo == "esc":
+            return Acao("esc", Alvo(f"regiao_{ordem.etapa}", 1.0, (0, 0, 0, 0), None))
+        return Acao(f"regiao_{ordem.tipo}", Alvo(alvo, 1.0, (0, 0, 0, 0), None))
+
     def passo(self, quadro, agora, *, partida=False, foco=True, cursor=False, no_onibus=False,
               hud_visivel=None, asa_delta=False, espectando=False):
         """Recebe imagem BGR e tempo monotônico em segundos. Retorna Acao ou None."""
@@ -713,6 +808,16 @@ class Fluxo:
         if agora < self._proxima_acao:
             self.motivo_anti_afk = "intervalo_entre_acoes"
             return None
+        if self.regiao.alvo is not None and not (partida or no_onibus or asa_delta or espectando):
+            self.motivo_anti_afk = "ajustando_regiao"
+            if not self.config.regiao_auto and self.regiao.fechando is None:
+                self.regiao.cancelar(agora)
+            if not self.regiao.pronto(agora):
+                return None
+            alvo_regiao = self.regiao.alvo
+            tela = self.detector.tela_regiao(quadro)
+            lobby = not (tela.social or tela.configuracoes) and bool(self._procurar(quadro, *BOTOES_LOBBY))
+            return self._acao_regiao(self.regiao.passo(tela, agora, lobby=lobby), alvo_regiao)
         if not (partida or hud_recente) or no_onibus:
             self._quadros_hud_afk = 0
             if self._prazo_fila is None:
@@ -779,7 +884,11 @@ class Fluxo:
                 return None
             if alvo:
                 return self._clicar_e_verificar(alvo, quadro)
-        alvo = self.detector.detectar(quadro)
+        alvo = None
+        if (self.config.resgatar_recompensas and not (partida or espectando or no_onibus or asa_delta)
+                and (cursor or self._prazo_lobby is not None)):
+            alvo = self.detector.recompensa(quadro)
+        alvo = alvo or self.detector.detectar(quadro)
         if alvo:
             if alvo.nome == "jogar":
                 self._ultimo_hud_em_partida = None
@@ -790,14 +899,20 @@ class Fluxo:
         if self._prazo_lobby is not None and agora >= self._prazo_lobby:
             self._prazo_lobby = None
             return Acao("lobby_nao_encontrado")
-        alvo = self._procurar(quadro, "resgatar")
-        if alvo is None and not (self._fila_bloqueada or partida or espectando or no_onibus or asa_delta):
+        if not (self._fila_bloqueada or partida or espectando or no_onibus or asa_delta):
             alvo = self._procurar(quadro, *BOTOES_LOBBY)
         if alvo:
             self.inicio_partida = None
             self._sem_leitura_desde = None
             self._aviso_leitura = False
-            return self._clicar_e_verificar(alvo, quadro)
+            acao = self._clicar_e_verificar(alvo, quadro)
+            if acao and self.config.regiao_auto:
+                preferida = regiao_por_horario(self.config.regiao_manha, self.config.regiao_noite)
+                ordem = self.regiao.iniciar(preferida, agora)
+                if ordem:
+                    self.motivo_anti_afk = "ajustando_regiao"
+                    return self._acao_regiao(ordem, preferida)
+            return acao
         if self._prazo_lobby is not None or not partida:
             alvo = self._procurar(quadro, "aba_jogar")
             if alvo:

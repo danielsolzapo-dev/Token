@@ -53,6 +53,36 @@ def combinar(linhas, *, vertical=False):
 
 
 def identificar(linhas, largura, altura, tipo, *, sinalizar_ambiguidade=False):
+    if tipo in ("cabecalho_recompensa", "recompensa", "nome_recompensa"):
+        cabecalhos = ("ITENS ADQUIRIDOS", "ITEM ADQUIRIDO", "ITENS OBTIDOS", "ITEM OBTIDO",
+                      "ITEMS ACQUIRED", "ITEM ACQUIRED", "RECOMPENSAS ADQUIRIDAS",
+                      "RECOMPENSAS OBTIDAS", "RECOMPENSAS RESGATADAS", "REWARDS EARNED")
+        limite = 0.96 if tipo == "cabecalho_recompensa" else 0.40
+        titulos = [linha for linha in combinar(linhas) if linha.centro[1] <= limite * altura
+                   and normalizar(linha.texto).startswith(cabecalhos)]
+        if not titulos:
+            return None
+        if tipo == "cabecalho_recompensa":
+            return titulos[0]
+        botoes = {"RESGATAR", "RESGATAR TUDO", "RESGATAR TODOS", "RESGATAR TODAS",
+                  "COLETAR", "COLETAR TUDO", "CLAIM", "CLAIM ALL"}
+        if tipo == "recompensa":
+            opcoes = [linha for linha in combinar(linhas) if 0.22 * largura <= linha.centro[0] <= 0.80 * largura
+                      and 0.70 * altura <= linha.centro[1] <= 0.98 * altura
+                      and normalizar(linha.texto) in botoes]
+            return max(opcoes, key=lambda linha: linha.caixa[2], default=None)
+        genericos = ("OBRIGADO", "OBRIGADA", "THANKS", "OBRIGAD", "EQUIPAR", "EQUIP",
+                     "IR PARA", "GO TO", "RARIDADE", "CONJUNTO", "PARTE DO", "PART OF", "VOLTAR",
+                     "BACK", "INCOMUM", "COMUM", "RARO", "RARA", "EPICO", "EPICA", "LENDARI",
+                     "UNCOMMON", "COMMON", "RARE", "EPIC", "LEGENDARY", "MYTHIC", "MITIC")
+        categorias = {"PICKAXE", "PICARETA", "EMOTE", "GESTO", "TRAJE", "OUTFIT", "GLIDER", "ASA DELTA",
+                      "SPRAY", "WRAP", "ENVELOPAMENTO", "MOCHILA", "BACK BLING", "HARVESTING TOOL"}
+        candidatos = [linha for linha in combinar(linhas) if linha.caixa[0] >= 0.57 * largura
+                      and 0.12 * altura <= linha.centro[1] <= 0.66 * altura
+                      and len(normalizar(linha.texto)) >= 3 and not linha.texto.rstrip().endswith(".")
+                      and not normalizar(linha.texto).startswith((*cabecalhos, *genericos))
+                      and normalizar(linha.texto) not in botoes | categorias]
+        return max(candidatos, key=lambda linha: (linha.caixa[3], -linha.caixa[1], linha.caixa[2]), default=None)
     if tipo == "fechar_asa":
         rotulos = {"ENTRAR EM QUEDA LIVRE", "PARA ENTRAR EM QUEDA LIVRE", "ESPACO PARA ENTRAR EM QUEDA LIVRE",
                    "PARA FECHAR ASA DELTA", "PARA FECHAR A ASA DELTA", "ESPACO PARA FECHAR ASA DELTA",
@@ -176,8 +206,7 @@ class Reconhecedor:
             "EngineConfig.onnxruntime.inter_op_num_threads": 1,
         })
 
-    def ler(self, quadro, tipo):
-        altura, largura = quadro.shape[:2]
+    def linhas(self, quadro):
         if self._quadro_lido is not quadro:
             resultado = self.ocr(quadro, use_cls=False)
             self._linhas = [] if resultado.boxes is None else [
@@ -186,7 +215,11 @@ class Reconhecedor:
                 if score >= 0.78
             ]
             self._quadro_lido = quadro
-        linha = identificar(self._linhas, largura, altura, tipo, sinalizar_ambiguidade=True)
+        return self._linhas
+
+    def ler(self, quadro, tipo):
+        altura, largura = quadro.shape[:2]
+        linha = identificar(self.linhas(quadro), largura, altura, tipo, sinalizar_ambiguidade=True)
         if tipo == "confirmar_sair":
             self.dialogo_ambiguo = linha is AMBIGUO
         return None if linha is AMBIGUO else linha

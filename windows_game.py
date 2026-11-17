@@ -266,7 +266,7 @@ class Windows:
             return False
         if acao.tipo == "esc":
             return self._pressionar(janela, parar, (1,), 0.06)
-        if acao.tipo == "clicar":
+        if acao.tipo in ("clicar", "apontar"):
             esquerda, topo, direita, base = janela.area
             x, y = acao.alvo.centro
             x, y = esquerda + round(x), topo + round(y)
@@ -284,6 +284,8 @@ class Windows:
                     or self.user.GetAncestor(self.user.WindowFromPoint(ponto), 2) != janela.hwnd
                     or self.fortnite_em_foco() != janela):
                 return False
+            if acao.tipo == "apontar":
+                return self.disponivel(janela, parar)
             return self._clique(janela, parar, 0.15 if acao.tentativa % 2 else 0.085)
         if acao.passos:
             for tipo, *dados in acao.passos:
