@@ -73,6 +73,19 @@ class WebhookTest(unittest.TestCase):
 
 
 class RegiaoTest(unittest.TestCase):
+    def test_lobby_reconhecido_abre_o_perfil_diretamente(self):
+        detector = Detector()
+        quadro = np.zeros((900, 1440, 3), np.uint8)
+        aba = cv2.resize(detector.templates["aba_jogar_lobby"], (82, 35))
+        quadro[34:69, 155:237] = aba
+        perfil = detector.perfil_lobby(quadro)
+        self.assertIsNotNone(perfil)
+        x, y, largura, altura = perfil
+        self.assertAlmostEqual(x + largura / 2, 1358, delta=3)
+        self.assertAlmostEqual(y + altura / 2, 52, delta=3)
+        ordem = RegiaoLobby().iniciar("Oceania", 0, perfil=perfil)
+        self.assertEqual((ordem.tipo, ordem.etapa, ordem.caixa), ("clicar", "abrir_social", perfil))
+
     def test_menu_de_tres_linhas_reconhece_engrenagem_na_aba_vizinha(self):
         linhas = [Linha("Fechar o Fortnite", (1098, 121, 149, 18)),
                   Linha("Sair do Grupo", (1112, 175, 120, 20)),

@@ -173,7 +173,7 @@ class RegiaoLobby:
         self.ultima_tela = None
         self._pareamento_lido = None
 
-    def iniciar(self, alvo, agora):
+    def iniciar(self, alvo, agora, *, perfil=None):
         if alvo == self.confirmada or (alvo == self.falhou and agora < self.repetir_em):
             return None
         self.confirmada = None
@@ -190,6 +190,8 @@ class RegiaoLobby:
         self._esc_social = 1
         self.ultima_tela = None
         self._pareamento_lido = None
+        if perfil:
+            return OrdemRegiao("clicar", "abrir_social", perfil)
         return OrdemRegiao("esc", "abrir_social")
 
     def pronto(self, agora):

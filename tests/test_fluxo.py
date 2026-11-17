@@ -805,6 +805,8 @@ class PausaPainelTest(unittest.TestCase):
         painel.relogio = Mock()
         painel.botao = Mock()
         painel.diagnostico = Mock()
+        painel.salvamento = Mock()
+        painel.salvamento.submit.side_effect = lambda tarefa, *args, **kwargs: tarefa(*args, **kwargs)
         painel.status, painel.atividade = Mock(), Mock()
         for variavel in (painel.status, painel.atividade):
             variavel.set.side_effect = lambda texto, var=variavel: setattr(var.get, "return_value", texto)

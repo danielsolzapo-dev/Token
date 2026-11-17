@@ -1,5 +1,6 @@
 """Interface do Auto Farm para Windows."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 import json
 import os
@@ -21,7 +22,7 @@ from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao
                          criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
 from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
-from painel_tema import ACENTO, AMBAR, BG, TemaPainel, carregar_inter, escurecer_titulo
+from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, NORTE, regiao_por_horario
 from relogio_painel import RelogioPainel
 from tesouros import DetectorTesouros, monitorar_tesouros
@@ -36,7 +37,7 @@ CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
           "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto")
-CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite")
+CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite", "aparencia")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
     "lobby_pronto": "Pronto", "menu_aba": "Abrir menu", "voltar_lobby": "Voltar ao lobby",
@@ -53,7 +54,7 @@ def carregar_config():
         ajustes = {chave: dados[chave] for chave in OPCOES if type(dados.get(chave)) is bool}
         if isinstance(dados.get("webhook_url"), str):
             ajustes["webhook_url"] = dados["webhook_url"]
-        for chave, permitido in (("regiao_manha", MANHA), ("regiao_noite", NOITE)):
+        for chave, permitido in (("regiao_manha", MANHA), ("regiao_noite", NOITE), ("aparencia", tuple(APARENCIAS))):
             if dados.get(chave) in permitido:
                 ajustes[chave] = dados[chave]
         minutos = dados.get("minutos_partida")
@@ -128,17 +129,18 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 if bloqueio_hud:
                     partida = False
                 cursor = windows.cursor_visivel()
-                alvo_onibus, score_onibus = detector.aviso_onibus(quadro)
+                lendo_menu = cursor and fluxo.navegando_menu
+                alvo_onibus, score_onibus = (None, 0.0) if lendo_menu else detector.aviso_onibus(quadro)
                 if parar.is_set():
                     break
                 onibus = bool(alvo_onibus)
-                alvo_asa, score_asa = detector.aviso_asa(quadro) if not onibus else (None, 0.0)
+                alvo_asa, score_asa = detector.aviso_asa(quadro) if not (onibus or lendo_menu) else (None, 0.0)
                 if parar.is_set():
                     break
                 asa_delta = bool(alvo_asa)
                 contagem = fluxo.partidas
                 agora = time.monotonic()
-                if not partida or onibus or asa_delta:
+                if not partida or onibus or asa_delta or lendo_menu:
                     candidato_esquadrao = contagem_esquadrao = None
                     quadros_esquadrao = 0
                 elif agora >= proximo_esquadrao:
@@ -160,7 +162,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     tela = fluxo.regiao.ultima_tela
                     if tela is not None and tela is not tela_regiao_anterior:
                         tela_regiao_anterior = tela
-                        if tela.configuracoes or tela.social:
+                        if tela.configuracoes or tela.social or captura_regiao is None:
                             captura_regiao = quadro
                         principal, subregiao = tela.pareamento, tela.subregiao
                         seletor = subregiao if (principal and principal.valor == AMERICA_DO_NORTE
@@ -350,136 +352,238 @@ class Painel:
         self.teste_webhook_em_curso = False
         self._pausado_visual = None
         self._proximo_relogio = 0.0
+        self._ultima_atualizacao = time.monotonic()
 
+        self.salvamento = ThreadPoolExecutor(max_workers=1, thread_name_prefix="Ajustes")
+        self.aparencia = tk.StringVar(janela, APARENCIAS[self.config.aparencia])
         janela.title(f"Auto Farm {VERSAO}")
-        janela.configure(bg=BG)
-        janela.geometry("650x735")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         familias = set(tkfont.families(janela))
         familia = next((nome for nome in ("Inter Auto Farm", "Inter") if nome in familias), "Segoe UI")
         self.tema = TemaPainel(janela, familia)
-        self.montar()
-        janela.update_idletasks()
-        janela.minsize(590, self.conteudo.winfo_reqheight())
-        escurecer_titulo(janela)
-        janela.bind("<Map>", lambda evento: escurecer_titulo(janela) if evento.widget is janela else None, add="+")
+        self.viewport = tk.Canvas(janela, bd=0, highlightthickness=0, yscrollincrement=20)
+        self.barra = ttk.Scrollbar(janela, orient="vertical", command=self.viewport.yview)
+        self.viewport.configure(yscrollcommand=self.barra.set)
+        janela.rowconfigure(0, weight=1)
+        janela.columnconfigure(0, weight=1)
+        self.viewport.grid(row=0, column=0, sticky="nsew")
+        self.barra.grid(row=0, column=1, sticky="ns")
+        self.conteudo = None
+        self._medidas_viewport = None
+        self.viewport.bind("<Configure>", self._dimensionar_conteudo)
+        janela.bind("<MouseWheel>", self._rolar)
+        janela.bind("<Map>", self._ao_mapear)
+        janela.bind("<Destroy>", self._ao_destruir)
+        self.montar(self.config.aparencia)
         self.status.trace_add("write", self.decorar_estado)
-        self.decorar_estado()
-        janela.after(45, self.atualizar)
-        janela.after(1000, self.verificar_automaticamente)
+        self._callback_interface = janela.after(45, self.atualizar)
+        self._callback_atualizacao = janela.after(1000, self.verificar_automaticamente)
+
+    def _ao_destruir(self, evento):
+        if evento.widget is self.janela:
+            self.janela.after_cancel(self._callback_interface)
+            self.janela.after_cancel(self._callback_atualizacao)
+
+    def _ao_mapear(self, evento):
+        if evento.widget is self.janela:
+            ajustar_titulo(self.janela, self.config.aparencia == "mono")
+
+    def _rolar(self, evento):
+        if (isinstance(evento.widget, tk.Misc) and evento.widget.winfo_toplevel() is self.janela
+                and not isinstance(evento.widget, (ttk.Spinbox, ttk.Combobox))):
+            self.viewport.yview_scroll(-int(evento.delta / 120), "units")
+
+    def _dimensionar_conteudo(self, _=None):
+        if self.conteudo is None:
+            return
+        largura, altura = self.viewport.winfo_width(), self.viewport.winfo_height()
+        if min(largura, altura) <= 1:
+            return
+        natural = self.conteudo.winfo_reqheight()
+        medidas = largura, altura, natural
+        if medidas == self._medidas_viewport:
+            return
+        self._medidas_viewport = medidas
+        self.viewport.itemconfigure(self.janela_conteudo, width=largura, height=max(altura, natural))
+        self.viewport.configure(scrollregion=(0, 0, largura, max(altura, natural)))
+        if natural > altura:
+            self.barra.grid()
+        else:
+            self.barra.grid_remove()
+
+    def trocar_aparencia(self, _=None):
+        escolha = next((chave for chave, nome in APARENCIAS.items() if nome == self.aparencia.get()), self.config.aparencia)
+        if escolha != self.config.aparencia:
+            self.config = replace(self.config, aparencia=escolha)
+            self.montar(escolha)
+            self._salvar_preferencias()
+
+    def _salvar_preferencias(self):
+        self.salvamento.submit(self._gravar_preferencias, self.config)
+
+    def _gravar_preferencias(self, config):
+        try:
+            salvar_config(config)
+        except OSError:
+            self.eventos.put(("erro", "Não foi possível salvar os ajustes neste computador."))
+
+    def _registrar_diagnostico(self, evento, **dados):
+        if self.diagnostico:
+            self.salvamento.submit(self.diagnostico.registrar, evento, **dados)
 
     def decorar_estado(self, *_):
         pausado = self.status.get() in ("Pausado", "Pausando")
         if pausado == self._pausado_visual:
             return
         self._pausado_visual = pausado
-        self.rotulo_estado.configure(style="Pausado.TLabel" if pausado else "Status.TLabel")
+        cor = self.tema.paleta
         self.icone_estado.configure(image=self.tema.icone(
-            "pausa" if pausado else "play", AMBAR if pausado else ACENTO, 22))
-        self.botao.configure(image=self.tema.icone("play" if pausado else "pausa", BG))
+            "pausa" if pausado else "play", cor.texto_lateral, 19))
+        self.botao.configure(image=self.tema.icone("play" if pausado else "pausa", cor.texto_principal))
 
     def botao_com_icone(self, pai, nome, icone, comando, *, principal=False):
-        imagem = self.tema.icone(icone, BG) if principal else self.tema.icone(icone)
-        return ttk.Button(pai, text=f"  {nome}", image=imagem, compound="left", command=comando,
+        cor = self.tema.paleta.texto_principal if principal else self.tema.paleta.texto
+        return ttk.Button(pai, text=nome, image=self.tema.icone(icone, cor), compound="left", command=comando,
                           style="Start.TButton" if principal else "TButton")
 
-    def montar(self):
-        painel = self.conteudo = ttk.Frame(self.janela, padding=(24, 19, 24, 18))
-        painel.pack(fill="both", expand=True)
-        cabecalho = ttk.Frame(painel)
-        cabecalho.pack(fill="x", pady=(0, 12))
-        ttk.Label(cabecalho, image=self.tema.icone("bot", tamanho=28)).grid(row=0, column=0, padx=(0, 11))
-        ttk.Label(cabecalho, text="Auto Farm", style="Titulo.TLabel").grid(row=0, column=1, sticky="w")
-        versao = ttk.Frame(cabecalho, style="Metrica.TFrame", padding=1)
-        versao.grid(row=0, column=2, padx=(10, 0), sticky="w")
-        ttk.Label(versao, text=VERSAO, style="Versao.TLabel").pack()
-        ttk.Label(cabecalho, text="Fortnite · Fila, saída por tempo e movimento", style="Info.TLabel").grid(
-            row=1, column=1, columnspan=2, sticky="w", pady=(2, 0))
+    def _estado_visual_botoes(self):
+        if self.conteudo is None:
+            return {}
+        return {nome: (getattr(self, nome).cget("text"), getattr(self, nome).instate(["disabled"]))
+                for nome in ("botao", "botao_testar", "botao_diagnostico", "botao_atualizacao")}
 
-        resumo = ttk.Frame(painel, style="Card.TFrame", padding=(14, 10))
-        resumo.pack(fill="x", pady=(0, 10))
-        estado = ttk.Frame(resumo, style="CardInterior.TFrame")
-        estado.pack(fill="x", pady=(0, 8))
-        self.icone_estado = ttk.Label(estado, style="Card.TLabel")
-        self.icone_estado.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 9), pady=(2, 0))
-        self.rotulo_estado = ttk.Label(estado, textvariable=self.status, wraplength=470)
-        self.rotulo_estado.grid(row=0, column=1, sticky="w")
-        ttk.Label(estado, textvariable=self.atividade, style="CardInfo.TLabel", wraplength=470).grid(
-            row=1, column=1, sticky="w", pady=(2, 0))
-        metricas = ttk.Frame(resumo, style="CardInterior.TFrame")
-        metricas.pack(fill="x")
-        for coluna, (titulo, valor) in enumerate((
-            ("Partidas", self.total), ("Próxima saída", self.proxima_saida), ("Farmando", self.farmando),
-        )):
-            metricas.columnconfigure(coluna, weight=1, uniform="metricas")
-            cartao = ttk.Frame(metricas, padding=(11, 6), style="Metrica.TFrame")
-            cartao.grid(row=0, column=coluna, sticky="nsew", padx=(0, 8 if coluna < 2 else 0))
-            ttk.Label(cartao, text=titulo, style="MetricaTitulo.TLabel").pack(anchor="w")
-            estilo_valor = "MetricaVazia.TLabel" if valor is self.proxima_saida else "MetricaValor.TLabel"
-            rotulo = ttk.Label(cartao, textvariable=valor, style=estilo_valor)
-            rotulo.pack(anchor="w")
-            if valor is self.proxima_saida:
-                self.rotulo_proxima_saida = rotulo
-        automacao = ttk.Frame(painel, style="Card.TFrame", padding=(14, 10))
-        automacao.pack(fill="x", pady=(0, 10))
-        ttk.Label(automacao, text="  Automação", image=self.tema.icone("automacao", tamanho=19),
-                  compound="left", style="Secao.TLabel").pack(anchor="w", pady=(0, 5))
-        for nome, icone, texto in (
-            ("clicar_continuar", "alvo", "Clicar em Continuar após a eliminação"),
-            ("fallback_cor", "cor", "Procurar Jogar Novamente pela cor"),
-            ("anti_afk", "movimento", "Ativar movimento anti-AFK"),
-            ("rotina_aerea", "salto", "Saltar e fechar a asa-delta com Espaço"),
-            ("sair_por_tempo", "saida", "Voltar ao lobby após o tempo da partida"),
+    def montar(self, aparencia):
+        estados = self._estado_visual_botoes()
+        if self.conteudo is not None:
+            self.viewport.delete(self.janela_conteudo)
+            self.conteudo.destroy()
+        self.tema.aplicar(aparencia)
+        cor = self.tema.paleta
+        self.viewport.configure(background=cor.fundo)
+        self.janela.configure(background=cor.fundo)
+        rosa = aparencia == "rosa"
+        self.janela.minsize(420 if rosa else 705, 345)
+        altura = min(810 if rosa else 550, int(self.janela.winfo_screenheight() * 0.9))
+        self.janela.geometry(f"{500 if rosa else 875}x{altura}")
+        ajustar_titulo(self.janela, not rosa)
+        self.conteudo = ttk.Frame(self.viewport)
+        self._medidas_viewport = None
+        self.janela_conteudo = self.viewport.create_window(0, 0, anchor="nw", window=self.conteudo)
+        self.conteudo.bind("<Configure>", self._dimensionar_conteudo)
+        resumo = ttk.Frame(self.conteudo, style="Lateral.TFrame", padding=(20, 12 if rosa else 19))
+        operacoes = ttk.Frame(self.conteudo, padding=(16, 16))
+        if rosa:
+            resumo.pack(fill="x")
+            operacoes.pack(fill="x")
+        else:
+            resumo.configure(width=236)
+            resumo.pack(side="left", fill="y")
+            operacoes.pack(side="left", fill="both", expand=True)
+        self._montar_sessao(resumo, rosa)
+        self._montar_controles(operacoes, rosa)
+        for nome, (texto, desativado) in estados.items():
+            widget = getattr(self, nome)
+            widget.configure(text=texto)
+            widget.state(["disabled"] if desativado else ["!disabled"])
+        self._pausado_visual = None
+        self.decorar_estado()
+        self.viewport.yview_moveto(0)
+
+    def _montar_sessao(self, resumo, rosa):
+        alinhamento = "center" if rosa else "w"
+        ttk.Label(resumo, text="Auto Farm", style="Titulo.TLabel").pack(anchor=alinhamento)
+        ttk.Label(resumo, text=f"v{VERSAO} · Fortnite", style="LateralInfo.TLabel").pack(
+            anchor=alinhamento, pady=(1, 8 if rosa else 12))
+        ttk.Label(resumo, text="Aparência", style="LateralInfo.TLabel").pack(anchor=alinhamento, pady=(0, 3))
+        seletor = ttk.Combobox(resumo, state="readonly", values=tuple(APARENCIAS.values()),
+                              textvariable=self.aparencia, width=22)
+        seletor.pack(anchor=alinhamento, pady=(0, 8 if rosa else 14))
+        seletor.bind("<<ComboboxSelected>>", self.trocar_aparencia)
+        estado = ttk.Frame(resumo, style="Lateral.TFrame")
+        estado.pack(anchor=alinhamento)
+        self.icone_estado = ttk.Label(estado, style="Lateral.TLabel")
+        self.icone_estado.pack(side="left", padx=(0, 6))
+        self.rotulo_estado = ttk.Label(estado, textvariable=self.status, style="Estado.TLabel",
+                                      wraplength=330 if rosa else 155)
+        self.rotulo_estado.pack(side="left")
+        ttk.Label(resumo, textvariable=self.atividade, style="LateralInfo.TLabel",
+                  wraplength=365 if rosa else 180, justify="center" if rosa else "left").pack(
+                      anchor=alinhamento, pady=(3, 7 if rosa else 12))
+        if rosa:
+            self._metrica(resumo, "Farmando", self.farmando, contagem="Tempo.TLabel").pack(pady=(0, 6))
+            linha = ttk.Frame(resumo, style="Lateral.TFrame")
+            linha.pack(fill="x")
+            for coluna, (nome, valor) in enumerate((("Partidas", self.total), ("Próxima saída", self.proxima_saida))):
+                linha.columnconfigure(coluna, weight=1, uniform="metricas")
+                self._metrica(linha, nome, valor, cartao=True).grid(
+                    row=0, column=coluna, sticky="ew", padx=(0, 8) if coluna == 0 else 0)
+        else:
+            for nome, valor in (("Partidas", self.total), ("Próxima saída", self.proxima_saida), ("Farmando", self.farmando)):
+                self._metrica(resumo, nome, valor).pack(fill="x", pady=(0, 10))
+            self.botao = self.botao_com_icone(resumo, "Iniciar", "play", self.alternar, principal=True)
+            self.botao.pack(fill="x", pady=(5, 0))
+
+    def _metrica(self, pai, legenda, variavel, *, cartao=False, contagem="Metrica.TLabel"):
+        area = ttk.Frame(pai, style="Card.TFrame" if cartao else "Lateral.TFrame", padding=(10, 4) if cartao else 0)
+        ttk.Label(area, text=legenda, style="CardInfo.TLabel" if cartao else "LateralInfo.TLabel").pack()
+        ttk.Label(area, textvariable=variavel, style="MetricaCard.TLabel" if cartao else contagem).pack()
+        return area
+
+    def _montar_controles(self, painel, rosa):
+        automacao = ttk.Frame(painel, style="Card.TFrame", padding=(13, 10))
+        automacao.pack(fill="x", pady=(0, 9))
+        ttk.Label(automacao, text="Automação", style="Secao.TLabel").pack(anchor="w", pady=(0, 4))
+        for nome, texto in (
+            ("clicar_continuar", "Clicar em Continuar após a eliminação"),
+            ("fallback_cor", "Procurar Jogar Novamente pela cor"),
+            ("anti_afk", "Ativar movimento anti-AFK"),
+            ("rotina_aerea", "Saltar e fechar a asa-delta com Espaço"),
+            ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
         ):
-            ttk.Checkbutton(automacao, text=f"  {texto}", image=self.tema.icone(icone), compound="left",
-                            variable=self.opcoes[nome], style="Switch.TCheckbutton").pack(anchor="w", pady=2)
-        ttk.Frame(automacao, height=1, style="Separador.TFrame").pack(fill="x", pady=(5, 7))
+            ttk.Checkbutton(automacao, text=texto, variable=self.opcoes[nome], style=self.tema.switch).pack(fill="x")
+        ttk.Frame(automacao, style="Separador.TFrame").pack(fill="x", pady=6)
         campo = ttk.Frame(automacao, style="CardInterior.TFrame")
-        campo.pack(anchor="w")
-        ttk.Label(campo, text="Minutos por partida", style="Card.TLabel").pack(side="left", padx=(0, 14))
+        campo.pack(fill="x")
+        ttk.Label(campo, text="Minutos por partida", style="Card.TLabel").pack(side="left", padx=(0, 10))
         minutos = tuple(f"{passo / 2:g}".replace(".", ",") for passo in range(2, 121))
-        ttk.Spinbox(campo, textvariable=self.minutos, values=minutos, width=9).pack(side="left", padx=(0, 12))
+        ttk.Spinbox(campo, textvariable=self.minutos, values=minutos, width=8).pack(side="left", padx=(0, 8))
         ttk.Label(campo, text="1–60 min", style="CardInfo.TLabel").pack(side="left")
+        if rosa:
+            self.botao = self.botao_com_icone(painel, "Iniciar", "play", self.alternar, principal=True)
+            self.botao.pack(fill="x", pady=(0, 8))
+        ferramentas = ttk.Frame(painel)
+        ferramentas.pack(fill="x")
+        self.botao_testar = self.botao_com_icone(ferramentas, "Testar imagem", "imagem", self.testar)
+        self.botao_diagnostico = self.botao_com_icone(ferramentas, "Copiar diagnóstico", "diagnostico", self.copiar_diagnostico)
+        self._alinhar_botoes(ferramentas, self.botao_testar, self.botao_diagnostico)
+        ttk.Label(painel, text="F6  Iniciar/Pausar     F7  Marcar falha no diagnóstico",
+                  style="Info.TLabel", wraplength=360).pack(anchor="w", pady=(4, 9))
 
-        comandos = ttk.Frame(painel)
-        comandos.pack(fill="x")
-        self.botao = self.botao_com_icone(comandos, "Iniciar", "play", self.alternar, principal=True)
-        self.botao_testar = self.botao_com_icone(comandos, "Testar imagem", "imagem", self.testar)
-        self.botao_diagnostico = self.botao_com_icone(comandos, "Copiar diagnóstico", "diagnostico",
-                                                     self.copiar_diagnostico)
-        for coluna, botao in enumerate((self.botao, self.botao_testar, self.botao_diagnostico)):
-            comandos.columnconfigure(coluna, weight=1, uniform="acoes")
-            botao.grid(row=0, column=coluna, sticky="ew", padx=(0, 8 if coluna < 2 else 0))
-        atalhos = ttk.Frame(painel)
-        atalhos.pack(fill="x", pady=(5, 10))
-        ttk.Label(atalhos, text="F6 para iniciar ou pausar", style="Info.TLabel").pack(side="left", padx=4)
-        ttk.Label(atalhos, text="F7 para marcar uma falha no diagnóstico", style="Info.TLabel").pack(side="right", padx=4)
-
-        atualizacao = ttk.Frame(painel, style="Card.TFrame", padding=(14, 10))
+        atualizacao = ttk.Frame(painel, style="Card.TFrame", padding=(13, 10))
         atualizacao.pack(fill="x")
-        ttk.Label(atualizacao, text="  Atualizações", image=self.tema.icone("atualizar", tamanho=19),
-                  compound="left", style="Secao.TLabel").pack(anchor="w", pady=(0, 5))
-        opcoes_atualizacao = ttk.Frame(atualizacao, style="CardInterior.TFrame")
-        opcoes_atualizacao.pack(fill="x")
-        ttk.Checkbutton(opcoes_atualizacao, text="  Atualizar automaticamente", variable=self.opcoes["atualizar_auto"],
-                        command=self.salvar_preferencia_atualizacao, style="Switch.TCheckbutton",
-                        image=self.tema.icone("atualizar"), compound="left").pack(side="left")
-        self.botao_atualizacao = self.botao_com_icone(opcoes_atualizacao, "Verificar", "atualizar", self.acao_atualizacao)
+        ttk.Label(atualizacao, text="Atualizações", style="Secao.TLabel").pack(anchor="w")
+        linha = ttk.Frame(atualizacao, style="CardInterior.TFrame")
+        linha.pack(fill="x", pady=(4, 0))
+        self.botao_atualizacao = self.botao_com_icone(linha, "Verificar", "atualizar", self.acao_atualizacao)
         self.botao_atualizacao.pack(side="right")
+        ttk.Checkbutton(linha, text="Atualizar automaticamente", variable=self.opcoes["atualizar_auto"],
+                        command=self.salvar_preferencia_atualizacao, style=self.tema.switch).pack(
+                            side="left", fill="x", expand=True, padx=(0, 12))
         ttk.Label(atualizacao, textvariable=self.status_atualizacao, style="CardInfo.TLabel",
-                  wraplength=500).pack(anchor="w", pady=(4, 0))
+                  wraplength=365).pack(anchor="w", pady=(3, 0))
+        rodape = ttk.Frame(painel)
+        rodape.pack(fill="x", pady=(9, 0))
+        self._alinhar_botoes(rodape,
+                           self.botao_com_icone(rodape, "Recompensas e webhook", "presente", self.mostrar_webhook),
+                           self.botao_com_icone(rodape, "Regiões por horário", "relogio", self.mostrar_regiao))
+        ttk.Label(painel, textvariable=self.status_webhook, style="Info.TLabel",
+                  wraplength=365).pack(anchor="w", pady=(5, 0))
 
-        recompensas = ttk.Frame(painel)
-        recompensas.pack(fill="x", pady=(10, 0))
-        webhook = self.botao_com_icone(recompensas, "Recompensas e webhook", "presente", self.mostrar_webhook)
-        regioes = self.botao_com_icone(recompensas, "Regiões por horário", "relogio", self.mostrar_regiao)
-        aviso_webhook = ttk.Frame(recompensas, style="Card.TFrame", padding=(8, 4))
-        ttk.Label(aviso_webhook, textvariable=self.status_webhook, style="CardInfo.TLabel",
-                  image=self.tema.icone("link"), compound="left", wraplength=152,
-                  anchor="center").pack(expand=True, fill="x")
-        for coluna, item in enumerate((webhook, aviso_webhook, regioes)):
-            recompensas.columnconfigure(coluna, weight=1)
-            item.grid(row=0, column=coluna, sticky="nsew", padx=(0, 8 if coluna < 2 else 0))
+    @staticmethod
+    def _alinhar_botoes(pai, *botoes):
+        for coluna, botao in enumerate(botoes):
+            pai.columnconfigure(coluna, weight=1, uniform="botoes")
+            botao.grid(row=0, column=coluna, sticky="ew", padx=(0, 7) if coluna + 1 < len(botoes) else 0)
 
     def mostrar_regiao(self):
         if self.janela_regiao and self.janela_regiao.winfo_exists():
@@ -513,13 +617,8 @@ class Painel:
 
     def salvar_regiao(self, ativar, manha, noite, estado):
         alteracoes = {"regiao_auto": ativar, "regiao_manha": manha, "regiao_noite": noite}
-        config = replace(self.config, **alteracoes)
-        try:
-            salvar_config(config)
-        except OSError:
-            estado.set("Não foi possível salvar a programação.")
-            return
-        self.config = config
+        self.config = replace(self.config, **alteracoes)
+        self._salvar_preferencias()
         self.opcoes["regiao_auto"].set(ativar)
         if self.fluxo is not None:
             self.fluxo.config = replace(self.fluxo.config, **alteracoes)
@@ -575,14 +674,11 @@ class Painel:
         try:
             if url:
                 validar_url(url)
-            salvar_config(config)
         except ErroWebhook as erro:
             self.status_webhook.set(str(erro))
             return
-        except OSError:
-            self.status_webhook.set("Não foi possível salvar o webhook.")
-            return
         self.config = config
+        self._salvar_preferencias()
         self.opcoes["resgatar_recompensas"].set(resgatar)
         self.opcoes["notificar_tesouros"].set(tesouros)
         if self.fluxo is not None:
@@ -623,10 +719,7 @@ class Painel:
 
     def salvar_preferencia_atualizacao(self):
         self.config = replace(self.config, atualizar_auto=self.opcoes["atualizar_auto"].get())
-        try:
-            salvar_config(self.config)
-        except OSError:
-            self.status_atualizacao.set("Não foi possível salvar o ajuste de atualização.")
+        self._salvar_preferencias()
         if self.config.atualizar_auto:
             self.verificar_atualizacoes()
 
@@ -635,7 +728,7 @@ class Painel:
             return
         if self.opcoes["atualizar_auto"].get() and self.release_disponivel is None:
             self.verificar_atualizacoes()
-        self.janela.after(3600000, self.verificar_automaticamente)
+        self._callback_atualizacao = self.janela.after(3600000, self.verificar_automaticamente)
 
     def verificar_atualizacoes(self):
         if self.operacao_atualizacao or self.fechando:
@@ -774,21 +867,16 @@ class Painel:
                 self.botao.state(["disabled"])
                 self.atividade.set(SOLTANDO_CONTROLES)
                 self.atualizar_pausa()
-                if self.diagnostico:
-                    self.diagnostico.registrar("pausa_solicitada", origem=origem)
+                self._registrar_diagnostico("pausa_solicitada", origem=origem)
             return
         try:
             config = self.ler_opcoes()
         except ValueError:
             self.atividade.set("Informe um tempo de partida entre 1 e 60 minutos.")
             return
-        try:
-            salvar_config(config)
-        except OSError:
-            self.atividade.set("Não foi possível salvar os ajustes neste computador.")
-        else:
-            self.atividade.set("Coloque o Fortnite em primeiro plano.")
         self.config = config
+        self._salvar_preferencias()
+        self.atividade.set("Coloque o Fortnite em primeiro plano.")
         self.relogio.prazo_saida = self.fluxo.prazo_saida if self.fluxo else None
         self._proximo_relogio = 0.0
         self.relogio.iniciar(time.monotonic())
@@ -904,21 +992,25 @@ class Painel:
         imagem.pack()
 
     def atualizar(self):
-        self._processar_atualizacao()
+        agora = time.monotonic()
+        if agora - self._ultima_atualizacao >= 1:
+            self._registrar_diagnostico("atraso_interface", segundos=round(agora - self._ultima_atualizacao, 2))
+        self._ultima_atualizacao = agora
         if self.windows.f6_pressionado() and not self.fechando and "disabled" not in self.botao.state():
             self.alternar("f6")
         if self.diagnostico:
             f7 = self.windows.f7()
             if f7 and not self.f7_anterior and self.worker is not None and self.worker.is_alive():
-                self.diagnostico.registrar("falha_marcada_pelo_usuario", estado=self.status.get())
+                self._registrar_diagnostico("falha_marcada_pelo_usuario", estado=self.status.get())
             self.f7_anterior = f7
+        self._processar_atualizacao()
         for _ in range(24):
             try:
                 evento, valor = self.eventos.get_nowait()
             except Empty:
                 break
             if evento == "estado":
-                if self.parar is not None and not self.parar.is_set():
+                if self.parar is not None and not self.parar.is_set() and self.status.get() != valor:
                     self.status.set(valor)
             elif evento == "total":
                 self.total.set(str(valor))
@@ -951,8 +1043,7 @@ class Painel:
                     if self.botao_teste_webhook and self.botao_teste_webhook.winfo_exists():
                         self.botao_teste_webhook.state(["!disabled"])
                 self.status_webhook.set(texto)
-                if self.diagnostico:
-                    self.diagnostico.registrar("webhook", teste=teste, enviado=sucesso, resultado=texto)
+                self._registrar_diagnostico("webhook", teste=teste, enviado=sucesso, resultado=texto)
             elif evento == "erro" or (evento == "acao" and self.parar is not None and not self.parar.is_set()):
                 self.atividade.set(valor)
         self.atualizar_pausa()
@@ -963,13 +1054,12 @@ class Painel:
         if self.fechando and (self.worker is None or not self.worker.is_alive()):
             self.janela.destroy()
         else:
-            self.janela.after(45 if self.worker is not None else 65, self.atualizar)
+            self._callback_interface = self.janela.after(45 if self.worker is not None else 65, self.atualizar)
 
     def atualizar_relogio(self, agora):
         saida, farmando = self.relogio.valores(agora)
         if saida != self.proxima_saida.get():
             self.proxima_saida.set(saida)
-            self.rotulo_proxima_saida.configure(style="MetricaVazia.TLabel" if saida == "—" else "MetricaValor.TLabel")
         if farmando != self.farmando.get():
             self.farmando.set(farmando)
 
@@ -1114,7 +1204,7 @@ def verificar_build():
     painel = Painel(janela, windows, config=Config())
     janela.update_idletasks()
     if getattr(sys, "frozen", False):
-        fonte = tkfont.Font(janela, font=ttk.Style(janela).lookup("MetricaValor.TLabel", "font"))
+        fonte = tkfont.Font(janela, font=ttk.Style(janela).lookup("Metrica.TLabel", "font"))
         if fonte.actual("family") != "Inter Auto Farm" or len({fonte.measure(n) for n in "0123456789"}) != 1:
             raise RuntimeError("As fontes tabulares do painel não foram carregadas.")
     if painel.botao.cget("state") == "disabled":
@@ -1141,6 +1231,7 @@ def main():
         janela.mainloop()
     finally:
         windows.fechar_atalho()
+        painel.salvamento.shutdown()
         if diagnostico:
             diagnostico.fechar()
 

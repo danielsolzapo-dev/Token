@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from embarque import Embarque
-from regiao import AMERICA_DO_NORTE, MANHA, NOITE, RegiaoLobby, ler_tela_regiao, regiao_por_horario
+from regiao import AMERICA_DO_NORTE, MANHA, NOITE, RegiaoLobby, TelaRegiao, ler_tela_regiao, regiao_por_horario
 
 
 # Nome do PNG, região de busca (x0, y0, x1, y1) e fator de trabalho em 1080p.
@@ -29,6 +29,7 @@ TEMPLATES = {
     "espectador": ("espectador.png", (0.3, 0, 0.7, 0.12), 1.0),
     "inventario": ("inventario.png", (0.65, 0.82, 1, 1), 1.0),
     "aba_jogar": ("aba_jogar.png", (0, 0, 0.3, 0.12), 1.0),
+    "aba_jogar_lobby": ("aba_jogar_lobby.png", (0.085, 0.025, 0.19, 0.10), 1.0),
     "onibus": ("onibus.png", (0.5, 0.45, 0.85, 0.65), 1.0),
     "asa_delta": ("asa_delta.png", (0.5, 0.45, 0.85, 0.65), 1.0),
     "reinicializando": ("reinicializando.png", (0.3, 0.45, 0.7, 0.7), 1.0),
@@ -68,6 +69,7 @@ class Config:
     regiao_auto: bool = False
     regiao_manha: str = MANHA[0]
     regiao_noite: str = NOITE[0]
+    aparencia: str = "mono"
 
 
 @dataclass(frozen=True)
@@ -296,6 +298,14 @@ class Detector:
 
     def tela_regiao(self, quadro):
         altura, largura = quadro.shape[:2]
+        engrenagem = self._engrenagem_horizontal(quadro)
+        if engrenagem:
+            menu = (max(0, 1 - 0.25 * altura / largura), 0.018,
+                    1 - 0.151 * altura / largura, 0.106)
+            for nome in ("menu_aba", "menu_aba_sel"):
+                controle = self.buscar_template(quadro, nome, 0.81, limites=menu)
+                if controle and controle.score >= 0.81:
+                    return TelaRegiao(social=True, engrenagem=engrenagem.caixa)
         leitor = self._carregar_leitor()
         linhas = leitor.linhas(quadro)
         tela = ler_tela_regiao(linhas, largura, altura)
@@ -310,12 +320,7 @@ class Detector:
                 detalhadas.append(replace(linha, caixa=(x + x0, y + y0, w, h)))
             tela = ler_tela_regiao([*linhas, *detalhadas], largura, altura)
         if tela.social:
-            # A barra horizontal acompanha a borda direita. A engrenagem fica à
-            # esquerda do menu de três linhas, em uma faixa própria dessa barra.
-            limites = (max(0, 1 - 0.35 * altura / largura), 0.018,
-                       1 - 0.263 * altura / largura, 0.106)
-            engrenagem = self.buscar_template(quadro, "engrenagem_menu_lobby", 0.87, limites=limites)
-            if engrenagem and engrenagem.score >= 0.87:
+            if engrenagem:
                 tela = replace(tela, engrenagem=engrenagem.caixa)
             elif not tela.engrenagem:
                 antiga = self.buscar_template(quadro, "engrenagem_lobby", 0.87)
@@ -323,6 +328,21 @@ class Detector:
                     tela = replace(tela, engrenagem=antiga.caixa)
         return replace(tela, pareamento=self._setas_regiao(quadro, tela.pareamento),
                        subregiao=self._setas_regiao(quadro, tela.subregiao))
+
+    def _engrenagem_horizontal(self, quadro):
+        altura, largura = quadro.shape[:2]
+        limites = (max(0, 1 - 0.35 * altura / largura), 0.018,
+                   1 - 0.263 * altura / largura, 0.106)
+        alvo = self.buscar_template(quadro, "engrenagem_menu_lobby", 0.87, limites=limites)
+        return alvo if alvo and alvo.score >= 0.87 else None
+
+    def perfil_lobby(self, quadro):
+        """Localiza a entrada do menu somente no cabeçalho Jogar reconhecido."""
+        if not self.procurar(quadro, ("aba_jogar_lobby", "aba_jogar")):
+            return None
+        altura, largura = quadro.shape[:2]
+        lado = round(0.046 * altura)
+        return largura - round(0.091 * altura) - lado // 2, round(0.058 * altura) - lado // 2, lado, lado
 
     def _setas_regiao(self, quadro, linha):
         if linha is None or "seta_regiao" not in self.templates:
@@ -616,6 +636,10 @@ class Fluxo:
         self._voltas_caminhada = 0
         self._inicio_hud_novo = None
         self._movimento_exige_transicao = False
+
+    @property
+    def navegando_menu(self):
+        return self.regiao.alvo is not None or self._prazo_menu is not None or self._prazo_lobby is not None
 
     @property
     def prazo_saida(self):
@@ -937,7 +961,7 @@ class Fluxo:
             acao = self._clicar_e_verificar(alvo, quadro)
             if acao and self.config.regiao_auto:
                 preferida = regiao_por_horario(self.config.regiao_manha, self.config.regiao_noite)
-                ordem = self.regiao.iniciar(preferida, agora)
+                ordem = self.regiao.iniciar(preferida, agora, perfil=self.detector.perfil_lobby(quadro))
                 if ordem:
                     self.motivo_anti_afk = "ajustando_regiao"
                     return self._acao_regiao(ordem, preferida)
