@@ -96,6 +96,14 @@ class FluxoTest(unittest.TestCase):
         self.assertIsNone(self.fluxo.inicio_partida)
         self.assertEqual(self.fluxo.partidas, 0)
 
+    def test_confere_clique_rapido_sem_antecipar_segunda_tentativa(self):
+        self.iniciar_clique("lobby_jogar")
+        self.assertIsNone(self.passo(0.5))
+        self.assertIsNone(self.passo(0.7, "lobby_jogar"))
+        self.assertIsNone(self.passo(0.9))
+        self.assertEqual(self.passo(1.1).tipo, "aguardando_fila")
+        self.assertEqual(self.fluxo.partidas, 0)
+
     def test_inicio_manual_tolera_perda_breve_do_hud(self):
         self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
         self.assertIsNone(self.passo(0, partida=True))

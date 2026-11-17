@@ -581,6 +581,7 @@ class Fluxo:
         self.partidas = 0
         self.inicio_partida = None
         self._proxima_acao = 0.0
+        self._repetir_clique_em = 0.0
         self._prazo_lobby = None
         self._tentativas_fechar_social = 0
         self._prazo_menu = None
@@ -712,10 +713,11 @@ class Fluxo:
 
     def registrar_clique(self, acao, enviado, agora, *, no_onibus=False):
         """Registra a tentativa quando o Windows aceitou a entrada do clique."""
-        self._proxima_acao = agora + (1.5 if enviado else 0.35)
+        self._proxima_acao = agora + (0.45 if enviado else 0.35)
         if not enviado:
             self.pausar()
             return
+        self._repetir_clique_em = agora + 1.5
         self._pendente = acao.alvo.nome
         self._tentativas += 1
         self._quadros_sem_alvo = 0
@@ -761,8 +763,11 @@ class Fluxo:
         if nome in ("voltar_lobby", "confirmar_sair") and self.detector.dialogo_ambiguo:
             self._quadros_sem_alvo = 0
             return None
-        if alvo and self._tentativas < 3:
-            return self._clicar_e_verificar(alvo, quadro)
+        if alvo:
+            if agora < self._repetir_clique_em:
+                return None
+            if self._tentativas < 3:
+                return self._clicar_e_verificar(alvo, quadro)
         if not alvo:
             if nome in BOTOES_FILA:
                 self._observar_transicao(hud_visivel, no_onibus, agora)

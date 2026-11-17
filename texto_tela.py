@@ -199,7 +199,8 @@ class Reconhecedor:
             raise ValueError("Modelos de leitura ausentes. Execute preparar_ocr.py ou use o executável.")
         self.ocr = RapidOCR(params={
             "Global.use_cls": False, "Global.log_level": "error", "Global.max_side_len": 1600,
-            "Det.limit_side_len": 960, "Det.limit_type": "min", "Det.model_path": str(det),
+            # Limita a maior dimensão para evitar ampliar recortes largos do HUD.
+            "Det.limit_side_len": 960, "Det.limit_type": "max", "Det.model_path": str(det),
             "Rec.model_path": str(rec), "Rec.lang_type": LangRec.LATIN,
             "Rec.ocr_version": OCRVersion.PPOCRV5, "Rec.model_type": ModelType.MOBILE,
             "EngineConfig.onnxruntime.intra_op_num_threads": 2,
