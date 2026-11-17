@@ -9,6 +9,8 @@ class Embarque:
         self.saltou_em = None
         self.fechou_asa = False
         self.fechou_em = None
+        self.voltas_movimento = 0
+        self.proximo_movimento = 0.0
         self.pausar()
 
     def pausar(self):
@@ -30,9 +32,13 @@ class Embarque:
             self.pausar()
         elif tipo == "saltar_onibus":
             self.saltou_em = agora
+            self.proximo_movimento = agora + 0.25
         elif tipo == "fechar_asa":
             self.fechou_asa = True
             self.fechou_em = agora
+        elif tipo == "movimento_aereo":
+            self.voltas_movimento += 1
+            self.proximo_movimento = agora + 0.55
 
     def em_transicao(self, agora):
         return (self.saltou_em is not None and agora - self.saltou_em < 45

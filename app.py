@@ -147,7 +147,9 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     eventos.put(("acao", "Confirmação de saída ambígua. Confira o jogo."))
                 dialogo_ambiguo_anterior = detector.dialogo_ambiguo
                 estado = ("Espectando" if bloqueio_hud else "No ônibus" if onibus else
-                          "Descendo de asa-delta" if asa_delta else "Em partida" if partida else
+                          "Descendo de asa-delta" if asa_delta else
+                          "Descendo após o salto" if fluxo.motivo_anti_afk == "movimento_aereo" else
+                          "Em partida" if partida else
                           "Procurando botões")
                 if fluxo.motivo_anti_afk == "aguardando_transicao_da_fila":
                     estado = "Aguardando transição da fila"
@@ -169,7 +171,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                           resultado="enviada" if executada else "interrompida", motivo=motivo)
                 if acao and acao.tipo == "clicar":
                     fluxo.registrar_clique(acao, executada, time.monotonic(), no_onibus=onibus)
-                elif acao and acao.tipo in ACOES_AEREAS:
+                elif acao and (acao.tipo in ACOES_AEREAS or acao.tipo == "movimento_aereo"):
                     fluxo.embarque.registrar(acao.tipo, executada, time.monotonic())
                 if fluxo.partidas != contagem:
                     eventos.put(("total", fluxo.partidas))
@@ -180,10 +182,11 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 if executada:
                     if acao.tipo == "clicar":
                         texto = "Clique enviado em " + ROTULOS.get(acao.alvo.nome, acao.alvo.nome)
-                    elif acao.tipo == "movimento":
+                    elif acao.tipo in ("movimento", "movimento_aereo"):
                         teclas = [nome for nome, scan in TECLAS.items()
                                   if any(p[0] in ("teclas", "andar_mouse") and scan in p[1] for p in acao.passos)]
-                        acoes = [f"caminhada ({'/'.join(teclas)})"] if teclas else []
+                        rotulo = "descida" if acao.tipo == "movimento_aereo" else "caminhada"
+                        acoes = [f"{rotulo} ({'/'.join(teclas)})"] if teclas else []
                         if any(p[0] in ("andar_mouse", "mouse") for p in acao.passos):
                             acoes.append("câmera")
                         if any(p[0] == "clique" for p in acao.passos):
@@ -669,6 +672,10 @@ def verificar_build():
     salto = fluxo_no_onibus.passo(onibus.copy(), 0.3, no_onibus=True)
     if salto is None or salto.passos != (("teclas", (57,), 0.16),):
         raise RuntimeError("O salto precisa enviar somente Espaço, inclusive sem fila iniciada pelo app.")
+    fluxo_no_onibus.embarque.registrar(salto.tipo, True, 0.46)
+    descida = fluxo_no_onibus.passo(np.zeros_like(onibus), 0.72)
+    if descida is None or descida.tipo != "movimento_aereo" or descida.passos != (("teclas", (17,), 0.8),):
+        raise RuntimeError("A descida precisa iniciar o movimento com W após o salto.")
     asa = np.zeros_like(onibus)
     aviso = detector.templates["asa_delta"]
     h, w = aviso.shape[:2]

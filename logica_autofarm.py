@@ -31,6 +31,8 @@ TEMPLATES = {
 BOTOES_LOBBY = ("lobby_jogar", "lobby_pronto")
 BOTOES_FILA = ("jogar", *BOTOES_LOBBY)
 AVISOS = ("onibus", "asa_delta", "reinicializando")
+TECLAS = {"W": 17, "A": 30, "D": 32}
+SEQUENCIA_AEREA = ("W", "WA", "W", "WD")
 ACOES_AEREAS = {
     "saltar_onibus": (("teclas", (57,), 0.16),),
     "fechar_asa": (("teclas", (57,), 0.16),),
@@ -676,6 +678,17 @@ class Fluxo:
         self.confirmacao.limpar()
         return None
 
+    def _mover_no_ar(self, quadro, agora, autorizado):
+        if not autorizado or agora < self.embarque.proximo_movimento:
+            return None
+        if self.detector.dialogo_ambiguo or self._procurar(
+                quadro, "jogar", "continuar", "inventario", "voltar_lobby", *BOTOES_LOBBY):
+            return None
+        direcao = SEQUENCIA_AEREA[self.embarque.voltas_movimento % len(SEQUENCIA_AEREA)]
+        codigos = tuple(TECLAS[tecla] for tecla in direcao)
+        self.motivo_anti_afk = "movimento_aereo"
+        return Acao("movimento_aereo", passos=(("teclas", codigos, 0.8),))
+
     def passo(self, quadro, agora, *, partida=False, foco=True, cursor=False, no_onibus=False,
               hud_visivel=None, asa_delta=False, espectando=False):
         """Recebe imagem BGR e tempo monotônico em segundos. Retorna Acao ou None."""
@@ -693,6 +706,11 @@ class Fluxo:
                 self._inicio_hud_novo = None
         hud_visivel = partida if hud_visivel is None else hud_visivel
         onibus_novo = no_onibus and (not self._onibus_visivel_no_clique or self._transicao_hud)
+        descendo = (self.embarque.saltou_em is not None and not no_onibus
+                    and self.embarque.em_transicao(agora))
+        controle_aereo = (descendo and self.config.rotina_aerea
+                          and self.config.anti_afk and not cursor and not espectando
+                          and self._prazo_menu is None and self._prazo_lobby is None)
         aereo_autorizado = onibus_novo or asa_delta or self.embarque.saltou_em is not None
         replay_na_tela = ((no_onibus or asa_delta) and self._pendente is None and self._prazo_fila is None
                           and self._procurar(quadro, "jogar", "continuar"))
@@ -701,17 +719,21 @@ class Fluxo:
             fase = self.embarque.observar(onibus=onibus_novo, asa=asa_delta)
             if fase:
                 self.motivo_anti_afk = "rotina_aerea"
-                self._proxima_acao = agora + 1
+                self._proxima_acao = agora + (0.25 if fase == "saltar_onibus" else 1)
                 return Acao(fase, passos=ACOES_AEREAS[fase])
         else:
             self.embarque.pausar()
         if (onibus_novo or asa_delta) and not replay_na_tela and self._pendente is None and self._prazo_fila is None:
             self.motivo_anti_afk = "aviso_de_onibus" if onibus_novo else "asa_delta"
-            return None
+            return self._mover_no_ar(quadro, agora, controle_aereo)
+        if descendo and partida and not espectando and (self._pendente in BOTOES_FILA
+                                                         or self._prazo_fila is not None):
+            self._transicao_hud = True
         if self._pendente:
             self.motivo_anti_afk = "verificando_clique"
-            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus,
-                                          partida or onibus_novo or asa_delta)
+            acao = self._verificar_clique(quadro, agora, hud_visivel, no_onibus,
+                                         partida or onibus_novo or asa_delta)
+            return acao or self._mover_no_ar(quadro, agora, controle_aereo)
         if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo >= 2:
@@ -720,8 +742,8 @@ class Fluxo:
             self._quadros_sem_alvo = 0
         if self._prazo_fila is not None:
             self.motivo_anti_afk = "aguardando_transicao_da_fila"
-            em_jogo = partida
-            return self._confirmar_fila(quadro, agora, em_jogo, hud_visivel, no_onibus)
+            acao = self._confirmar_fila(quadro, agora, partida, hud_visivel, no_onibus)
+            return acao or self._mover_no_ar(quadro, agora, controle_aereo)
         self._botoes_fila_clicados.clear()
         if self._prazo_menu is not None:
             self.motivo_anti_afk = "aguardando_menu_de_saida"
@@ -789,12 +811,17 @@ class Fluxo:
         if not self.config.anti_afk:
             self.motivo_anti_afk = "desativado"
             return None
+        if controle_aereo:
+            return self._mover_no_ar(quadro, agora, controle_aereo)
         if not partida or no_onibus or asa_delta or espectando:
             self.motivo_anti_afk = ("espectando" if espectando else "aviso_de_onibus" if no_onibus
                                    else "asa_delta" if asa_delta else "hud_indisponivel")
             return None
         if self._movimento_exige_transicao:
             self.motivo_anti_afk = "aguardando_transicao_da_fila"
+            return None
+        if descendo and cursor:
+            self.motivo_anti_afk = "cursor_visivel"
             return None
         # O ícone do menu isolado também pode aparecer junto do HUD de jogo.
         # Exige o controle de saída, com limiar maior se não houver cursor.
@@ -851,7 +878,6 @@ class Fluxo:
         return Acao("movimento", passos=tuple(passos))
 
 
-TECLAS = {"W": 17, "A": 30, "D": 32}
 VETORES = {"W": (0, 1), "A": (-1, 0), "D": (1, 0)}
 PESOS = {"W": 3.0, "A": 1.0, "D": 1.0}
 TIPOS = ("explorar", "andar", "camera", "pular", "agachar", "ajeitar")
