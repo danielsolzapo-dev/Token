@@ -707,9 +707,9 @@ class Painel:
         try:
             salvar_config(config)
         except OSError:
-            self.atividade.set("Não foi possível salvar os ajustes neste computador.")
+            erro_ajustes = "Não foi possível salvar os ajustes neste computador. "
         else:
-            self.atividade.set("Coloque o Fortnite em primeiro plano.")
+            erro_ajustes = ""
         self.config = config
         if self.fluxo is None:
             self.fluxo = Fluxo(Detector(config=config))
@@ -717,6 +717,7 @@ class Painel:
             self.fluxo.config = self.fluxo.detector.config = config
         self.fluxo.rearmar_fila()
         self.status.set("Iniciando")
+        self.atividade.set(erro_ajustes + self.ativar_fortnite_ao_iniciar())
         self.botao.configure(text="Pausar")
         self.resumo_sessao = None
         self.botao_relatorio.state(["disabled"])
@@ -726,6 +727,19 @@ class Painel:
             args=(self.windows, self.fluxo, self.eventos, self.parar, detector_bau),
         )
         self.worker.start()
+
+    def ativar_fortnite_ao_iniciar(self):
+        focar = getattr(self.windows, "focar_fortnite", None)
+        if not callable(focar):
+            return "Clique no Fortnite para liberar a automação."
+        try:
+            ativado = focar()
+        except OSError as erro:
+            return f"Não consegui ativar o Fortnite: {erro}. Clique no jogo para continuar."
+        if ativado:
+            return "Fortnite em primeiro plano; verificando janela e foco antes das ações."
+        motivo = getattr(self.windows, "ultima_falha", None) or "não confirmado"
+        return f"Fortnite não foi ativado ({motivo}). Clique no jogo para continuar."
 
     def selecionar_referencia_bau(self):
         caminho = filedialog.askopenfilename(

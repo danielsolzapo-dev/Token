@@ -515,6 +515,22 @@ class OcrRealTest(unittest.TestCase):
 
 
 class PainelTest(unittest.TestCase):
+    def test_iniciar_tenta_trazer_fortnite_para_frente_sem_fingir_sucesso(self):
+        painel = object.__new__(Painel)
+        painel.windows = SimpleNamespace(
+            focar_fortnite=lambda: True,
+            ultima_falha=None,
+        )
+        self.assertIn("Fortnite em primeiro plano", painel.ativar_fortnite_ao_iniciar())
+
+        painel.windows = SimpleNamespace(
+            focar_fortnite=lambda: False,
+            ultima_falha="windows_nao_permitiu_ativacao",
+        )
+        mensagem = painel.ativar_fortnite_ao_iniciar()
+        self.assertIn("windows_nao_permitiu_ativacao", mensagem)
+        self.assertIn("Clique no jogo", mensagem)
+
     def test_configurar_referencia_salva_recorte_validado_localmente(self):
         painel = object.__new__(Painel)
         painel.janela = None
@@ -859,6 +875,59 @@ class NotificadorTest(unittest.TestCase):
 
 
 class WindowsTest(unittest.TestCase):
+    def test_localiza_janela_fortnite_quando_nao_esta_em_foco(self):
+        area = (0, 0, 1280, 720)
+
+        def enumerar(callback, _):
+            callback(42, 0)
+            callback(43, 0)
+            return True
+
+        windows = object.__new__(Windows)
+        windows.user = SimpleNamespace(
+            IsWindowVisible=lambda _: True,
+            EnumWindows=enumerar,
+        )
+        windows.fortnite_em_foco = lambda: None
+        windows._nome_processo = lambda hwnd: (
+            "fortniteclient-win64-shipping.exe" if hwnd == 42 else "other.exe"
+        )
+        windows._area = lambda _: area
+        self.assertEqual(windows.localizar_fortnite(), Janela(42, area))
+
+    def test_ativa_fortnite_e_verifica_o_foco_real(self):
+        janela = Janela(42, (0, 0, 1280, 720))
+        chamadas = []
+        em_foco = [False]
+        windows = object.__new__(Windows)
+        windows.user = SimpleNamespace(
+            ShowWindow=lambda hwnd, comando: chamadas.append(("restaurar", hwnd, comando)),
+            SetForegroundWindow=lambda hwnd: (
+                chamadas.append(("ativar", hwnd)),
+                em_foco.__setitem__(0, True),
+                True,
+            )[-1],
+        )
+        windows.ultima_falha = None
+        windows.fortnite_em_foco = lambda: janela if em_foco[0] else None
+        windows.localizar_fortnite = lambda: janela
+        self.assertTrue(windows.focar_fortnite())
+        self.assertEqual([chamada[0] for chamada in chamadas], ["restaurar", "ativar"])
+        self.assertEqual(windows.ultima_falha, None)
+
+    def test_nao_assume_foco_se_windows_recusar_ativacao(self):
+        janela = Janela(42, (0, 0, 1280, 720))
+        windows = object.__new__(Windows)
+        windows.user = SimpleNamespace(
+            ShowWindow=lambda *_: None,
+            SetForegroundWindow=lambda *_: False,
+        )
+        windows.ultima_falha = None
+        windows.fortnite_em_foco = lambda: None
+        windows.localizar_fortnite = lambda: janela
+        self.assertFalse(windows.focar_fortnite())
+        self.assertEqual(windows.ultima_falha, "windows_nao_permitiu_ativacao")
+
     def test_geometria_mudou_antes_da_entrada(self):
         janela = Janela(42, (0, 0, 100, 100))
         windows = object.__new__(Windows)

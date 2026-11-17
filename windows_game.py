@@ -11,6 +11,10 @@ from PIL import ImageGrab
 
 
 F6 = 0x75
+SW_RESTORE = 9
+_ENUM_WINDOWS_CALLBACK = ctypes.WINFUNCTYPE(
+    wintypes.BOOL, wintypes.HWND, wintypes.LPARAM,
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +61,13 @@ class Windows:
         api.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
         api.GetForegroundWindow.restype = wintypes.HWND
         api.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        api.EnumWindows.argtypes = [_ENUM_WINDOWS_CALLBACK, wintypes.LPARAM]
+        api.EnumWindows.restype = wintypes.BOOL
+        api.IsWindowVisible.argtypes = [wintypes.HWND]
+        api.IsWindowVisible.restype = wintypes.BOOL
+        api.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        api.SetForegroundWindow.argtypes = [wintypes.HWND]
+        api.SetForegroundWindow.restype = wintypes.BOOL
         api.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         api.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
         api.GetAsyncKeyState.argtypes = [ctypes.c_int]
@@ -79,9 +90,9 @@ class Windows:
         self.kernel.QueryFullProcessImageNameW.argtypes = [
             wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)
         ]
+        self.ultima_falha = None
 
-    def fortnite_em_foco(self):
-        hwnd = self.user.GetForegroundWindow()
+    def _nome_processo(self, hwnd):
         if not hwnd:
             return None
         pid = wintypes.DWORD()
@@ -94,12 +105,52 @@ class Windows:
         try:
             if not self.kernel.QueryFullProcessImageNameW(handle, 0, nome, ctypes.byref(comprimento)):
                 return None
-            if nome.value.rsplit("\\", 1)[-1].casefold() != "fortniteclient-win64-shipping.exe":
-                return None
+            return nome.value.rsplit("\\", 1)[-1].casefold()
         finally:
             self.kernel.CloseHandle(handle)
+
+    def fortnite_em_foco(self):
+        hwnd = self.user.GetForegroundWindow()
+        if self._nome_processo(hwnd) != "fortniteclient-win64-shipping.exe":
+            return None
         area = self._area(hwnd)
         return Janela(hwnd, area) if area else None
+
+    def localizar_fortnite(self):
+        candidatos = []
+
+        def verificar(hwnd, _):
+            if not self.user.IsWindowVisible(hwnd):
+                return True
+            if self._nome_processo(hwnd) == "fortniteclient-win64-shipping.exe":
+                area = self._area(hwnd)
+                if area:
+                    candidatos.append(Janela(hwnd, area))
+            return True
+
+        self.user.EnumWindows(_ENUM_WINDOWS_CALLBACK(verificar), 0)
+        return max(
+            candidatos,
+            key=lambda janela: (janela.area[2] - janela.area[0])
+            * (janela.area[3] - janela.area[1]),
+            default=None,
+        )
+
+    def focar_fortnite(self):
+        self.ultima_falha = None
+        if self.fortnite_em_foco():
+            return True
+        janela = self.localizar_fortnite()
+        if janela is None:
+            self.ultima_falha = "janela_fortnite_nao_encontrada"
+            return False
+        self.user.ShowWindow(janela.hwnd, SW_RESTORE)
+        self.user.SetForegroundWindow(janela.hwnd)
+        em_foco = self.fortnite_em_foco()
+        if em_foco is not None and em_foco.hwnd == janela.hwnd:
+            return True
+        self.ultima_falha = "windows_nao_permitiu_ativacao"
+        return False
 
     def _area(self, hwnd):
         rect, origem = wintypes.RECT(), wintypes.POINT()

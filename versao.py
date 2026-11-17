@@ -1,3 +1,3 @@
 """Versão publicada pelo fluxo de release."""
 
-VERSAO = "2.0.10"
+VERSAO = "2.0.11"
