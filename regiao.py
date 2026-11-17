@@ -133,11 +133,11 @@ def ler_tela_regiao(linhas, largura, altura):
         return linhas_sem_valor[0] if linhas_sem_valor else None
 
     def rotulo_pareamento(texto):
-        trecho = re.match(r"(?:REGIAO (?:DE |DO )?PAREAMENT[O0]?|MATCHMAKING REGION)\b\s*(.*)", texto)
+        trecho = re.match(r"(?:R?EGIAO (?:DE |DO )?PAREAMENT[O0]?|MATCHMAKING REGION)\b\s*(.*)", texto)
         return trecho[1] if trecho else None
 
     def rotulo_subregiao(texto):
-        trecho = re.match(r"(?:.*?DE SUBREGIA[O0]|SUBREGION PREFERENCE)\b\s*(.*)", texto)
+        trecho = re.match(r"(?:.*?DE SUBREGI(?:A[O0]?)?|SUBREGION PREFERENCE)\b\s*(.*)", texto)
         return trecho[1] if trecho else None
 
     pareamento = linha_regiao(rotulo_pareamento) if configuracoes else None

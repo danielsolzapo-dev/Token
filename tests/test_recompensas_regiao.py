@@ -140,6 +140,18 @@ class RegiaoTest(unittest.TestCase):
         self.assertFalse(tela.subregiao.focada)
         self.assertEqual(tela.pareamento.caixa, linhas[3].caixa)
 
+    def test_le_pareamento_e_subregiao_na_aba_jogo_com_painel_lateral(self):
+        linhas = [Linha("IDIOMA E REGIÃO", (376, 122, 251, 33)),
+                  Linha("egião de Pareamento", (398, 188, 221, 25)),
+                  Linha("Oceania (335ms)", (655, 188, 173, 25)),
+                  Linha("referência de Subregi", (398, 256, 219, 25)),
+                  Linha("Automática", (678, 255, 123, 28))]
+        tela = ler_tela_regiao(linhas, 1440, 900)
+        self.assertIsNone(tela.aba_jogo)
+        self.assertEqual(tela.pareamento.valor, "Oceania")
+        self.assertEqual(tela.pareamento.caixa, linhas[2].caixa)
+        self.assertEqual(tela.subregiao.valor, "Automática")
+
     def test_seletor_com_rotulo_e_valor_na_mesma_caixa(self):
         linhas = [Linha("IDIOMA E REGIÃO", (125, 123, 248, 32)),
                   Linha("Região de Pareamento Europa (210 ms)", (144, 188, 520, 25))]
