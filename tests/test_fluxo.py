@@ -373,6 +373,47 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(9.8, "confirmar_sair").alvo.nome, "confirmar_sair")
         self.assertEqual(self.fluxo.partidas, 0)
 
+    def test_timer_abre_menu_quando_hud_some_antes_do_prazo(self):
+        self.fluxo.config = replace(self.fluxo.config, minutos_partida=6.5, timeout_lobby=90)
+        self.fluxo._iniciar_partida(0)
+        self.assertIsNone(self.passo(365, partida=True))
+        self.assertIsNone(self.passo(366))
+        self.assertIsNone(self.passo(389.9))
+        self.assertEqual(self.passo(390).tipo, "esc")
+        self.assertEqual(self.fluxo.motivo_anti_afk, "saida_por_tempo_sem_hud")
+        self.assertIsNone(self.passo(392, "menu_aba", cursor=True))
+        self.assertEqual(self.passo(394, "menu_aba", cursor=True).alvo.nome, "menu_aba")
+        self.assertIsNone(self.passo(396, "voltar_lobby", cursor=True))
+        self.assertEqual(self.passo(398, "voltar_lobby", cursor=True).tipo, "clique_confirmado")
+        self.assertIsNone(self.passo(400, "voltar_lobby", cursor=True))
+        self.assertEqual(self.passo(402, "voltar_lobby", cursor=True).alvo.nome, "voltar_lobby")
+        self.assertIsNone(self.passo(404, "confirmar_sair", cursor=True))
+        self.assertEqual(self.passo(406, "confirmar_sair", cursor=True).tipo, "clique_confirmado")
+        self.assertIsNone(self.passo(408, "confirmar_sair", cursor=True))
+        self.assertEqual(self.passo(410, "confirmar_sair", cursor=True).alvo.nome, "confirmar_sair")
+        self.assertIsNone(self.passo(412, "lobby_jogar", cursor=True))
+        self.assertEqual(self.passo(414, "lobby_jogar", cursor=True).tipo, "clique_confirmado")
+        self.assertIsNone(self.passo(416, "lobby_jogar", cursor=True))
+        self.assertEqual(self.passo(418, "lobby_jogar", cursor=True).alvo.nome, "lobby_jogar")
+
+    def test_timer_expirado_respeita_cursor_e_telas_conhecidas_sem_hud(self):
+        self.fluxo._iniciar_partida(0)
+        self.assertIsNone(self.passo(6, cursor=True))
+        self.assertIsNone(self.passo(7, no_onibus=True))
+        self.assertIsNone(self.passo(8, asa_delta=True))
+        self.assertIsNone(self.passo(9, "aba_jogar"))
+        self.assertIsNone(self.passo(10, "lobby_jogar"))
+        self.assertIsNone(self.fluxo.prazo_saida)
+
+    def test_saida_sem_hud_repete_uma_vez_e_aguarda_tela_conhecida(self):
+        self.fluxo._iniciar_partida(0)
+        self.assertEqual(self.passo(6).tipo, "esc")
+        self.assertEqual(self.passo(16).tipo, "menu_nao_encontrado")
+        self.assertEqual(self.passo(21).tipo, "esc")
+        self.assertEqual(self.passo(31).tipo, "menu_nao_encontrado")
+        self.assertIsNone(self.passo(36))
+        self.assertEqual(self.passo(37, partida=True).tipo, "esc")
+
     def test_resgate_verificado_antes_de_entrar_em_nova_fila(self):
         self.fluxo._prazo_lobby = 90
         self.assertIsNone(self.passo(0, "resgatar", cursor=True))

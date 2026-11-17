@@ -197,6 +197,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                           "Procurando botões")
                 if fluxo.motivo_anti_afk == "aguardando_transicao_da_fila":
                     estado = "Aguardando transição da fila"
+                elif fluxo.motivo_anti_afk in ("saida_por_tempo", "saida_por_tempo_sem_hud", "aguardando_menu_de_saida"):
+                    estado = "Saindo da partida"
                 elif fluxo.motivo_anti_afk == "ajustando_regiao":
                     estado = f"Ajustando região · {fluxo.regiao.alvo}" if fluxo.regiao.alvo else "Voltando ao lobby"
                 elif partida and contagem_esquadrao:

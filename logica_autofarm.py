@@ -554,6 +554,7 @@ class Fluxo:
         self._prazo_lobby = None
         self._prazo_menu = None
         self._repetir_saida_em = 0.0
+        self._tentativas_saida_sem_hud = 0
         self._prazo_fila = None
         self._fila_contada = False
         self._fila_expirada = False
@@ -606,6 +607,7 @@ class Fluxo:
         self.inicio_partida = agora
         self._ultimo_hud_em_partida = agora
         self._repetir_saida_em = 0.0
+        self._tentativas_saida_sem_hud = 0
         self._desvio = (0.0, 0.0, 0.0)
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
@@ -953,18 +955,28 @@ class Fluxo:
         if inventario_aberto:
             self._quadros_hud_afk = 0
             self._inicio_hud_novo = None
-        if partida or espectando:
-            self._sem_leitura_desde = None
-            self._aviso_leitura = False
-            prazo_saida = self.prazo_saida
-            if (prazo_saida is not None and agora >= max(prazo_saida, self._repetir_saida_em)
-                    and not inventario_aberto and not no_onibus and not asa_delta):
+        jogo_visivel = partida or espectando
+        if jogo_visivel:
+            self._tentativas_saida_sem_hud = 0
+        prazo_saida = self.prazo_saida
+        if (prazo_saida is not None and agora >= max(prazo_saida, self._repetir_saida_em)
+                and not inventario_aberto and not no_onibus and not asa_delta):
+            alvo_saida = self._procurar(quadro, "voltar_lobby") if cursor else None
+            if cursor and jogo_visivel and alvo_saida is None:
+                alvo_saida = self._procurar(quadro, "menu_aba")
+            pode_tentar_sem_hud = not cursor and self._tentativas_saida_sem_hud < 2
+            if alvo_saida or jogo_visivel or pode_tentar_sem_hud:
+                self.motivo_anti_afk = "saida_por_tempo" if jogo_visivel else "saida_por_tempo_sem_hud"
                 self._prazo_menu = agora + 10
-                alvo = (self._procurar(quadro, "voltar_lobby") or self._procurar(quadro, "menu_aba")) if cursor else None
-                if alvo:
-                    return self._clicar_e_verificar(alvo, quadro)
+                if alvo_saida:
+                    return self._clicar_e_verificar(alvo_saida, quadro)
+                if not jogo_visivel:
+                    self._tentativas_saida_sem_hud += 1
                 self._proxima_acao = agora + 1
                 return Acao("esc")
+        if jogo_visivel:
+            self._sem_leitura_desde = None
+            self._aviso_leitura = False
         elif self._sem_leitura_desde is None:
             self._sem_leitura_desde = agora
         elif not self._aviso_leitura and agora - self._sem_leitura_desde >= self.config.timeout_lobby:
