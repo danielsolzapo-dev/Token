@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from app import FINALIZANDO_LEITURA, Painel, monitorar
 from logica_autofarm import Acao, Alvo, Config, Detector, Fluxo, TEMPLATES
+from relogio_painel import RelogioPainel
 from texto_tela import Linha, Reconhecedor, identificar
 from windows_game import Janela, Windows
 
@@ -535,6 +536,36 @@ class FluxoTest(unittest.TestCase):
         fechar = self.passo(1.5, asa_delta=True)
         self.assertEqual(fechar.tipo, "fechar_asa")
         self.assertEqual(fechar.passos, (("teclas", (57,), 0.16),))
+
+    def test_salto_confirma_partida_apos_clique_ignorado_e_ativa_saida(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True, sair_por_tempo=True,
+                                   minutos_partida=5, timeout_lobby=90)
+        relogio = RelogioPainel()
+        relogio.iniciar(0)
+        self.iniciar_clique("lobby_pronto")
+        self.assertEqual(self.passo(2, "lobby_pronto").tentativa, 1)
+        self.assertEqual(self.passo(4, "lobby_pronto").tentativa, 2)
+        self.assertEqual(self.passo(6, "lobby_pronto").tipo, "clique_ignorado")
+        self.assertIsNone(self.passo(65, partida=True))
+        relogio.prazo_saida = self.fluxo.prazo_saida
+        self.assertEqual(relogio.valores(65)[0], "—")
+
+        self.assertIsNone(self.passo(78, no_onibus=True))
+        salto = self.passo(79, no_onibus=True)
+        self.assertEqual(salto.tipo, "saltar_onibus")
+        self.fluxo.embarque.registrar(salto.tipo, True, 79.16)
+        for instante in (83, 88):
+            self.assertEqual(self.passo(instante, partida=True).tipo, "movimento_aereo")
+        self.assertEqual(self.passo(93, partida=True).tipo, "partida_confirmada")
+        relogio.prazo_saida = self.fluxo.prazo_saida
+        self.assertEqual(relogio.valores(93)[0], "05:00")
+        self.assertEqual(relogio.valores(94)[0], "04:59")
+
+        self.assertIsNone(self.passo(125, partida=True))
+        self.assertEqual(self.passo(125.3, partida=True).tipo, "movimento")
+        self.assertEqual(self.passo(390, partida=True).tipo, "movimento")
+        self.assertEqual(self.passo(393, partida=True).tipo, "esc")
+        self.assertEqual(self.fluxo.partidas, 1)
 
     def test_perda_de_foco_exige_hud_reconfirmado_para_mover(self):
         self.habilitar_movimento()

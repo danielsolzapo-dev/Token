@@ -749,14 +749,7 @@ class Fluxo:
             self._quadros_sem_alvo = 0
             return Acao("clique_ignorado", alvo)
         if nome in BOTOES_FILA:
-            self.inicio_partida = None
-            self._prazo_lobby = None
-            self._prazo_fila = agora + self.config.timeout_lobby
-            self._fila_contada = False
-            self._fila_expirada = False
-            self._leituras_cancelamento = 0
-            self._quadros_partida = self._leituras_fila = 0
-            self._proximo_texto_fila = agora
+            self._iniciar_espera_fila(agora)
             return Acao("aguardando_fila")
         elif nome == "voltar_lobby":
             self._prazo_menu = None
@@ -765,6 +758,16 @@ class Fluxo:
             self._item_resgate = None
             return Acao("resgate_confirmado")
         return Acao("clique_confirmado")
+
+    def _iniciar_espera_fila(self, agora):
+        self.inicio_partida = None
+        self._prazo_lobby = None
+        self._prazo_fila = agora + self.config.timeout_lobby
+        self._fila_contada = self._fila_expirada = False
+        self._leituras_cancelamento = 0
+        self._quadros_partida = self._leituras_fila = 0
+        self._inicio_hud_novo = None
+        self._proximo_texto_fila = agora
 
     def _encerrar_espera_fila(self):
         self._prazo_fila = None
@@ -789,6 +792,8 @@ class Fluxo:
             self._iniciar_partida(agora)
             if not self._fila_contada:
                 self.partidas += 1
+            if self._bloqueado in BOTOES_FILA:
+                self._bloqueado = None
             self._fila_bloqueada = False
             self._encerrar_espera_fila()
             return Acao("partida_confirmada")
@@ -896,9 +901,14 @@ class Fluxo:
         if (onibus_novo or asa_delta) and not replay_na_tela and self._pendente is None and self._prazo_fila is None:
             self.motivo_anti_afk = "aviso_de_onibus" if onibus_novo else "asa_delta"
             return self._mover_no_ar(quadro, agora, controle_aereo)
-        if saiu_do_onibus and partida and not espectando and (self._pendente in BOTOES_FILA
-                                                              or self._prazo_fila is not None):
-            self._transicao_hud = True
+        if saiu_do_onibus and partida and not espectando and not cursor:
+            if (descendo and self.inicio_partida is None and self._pendente is None and self._prazo_fila is None
+                    and not self.navegando_menu and not replay_na_tela):
+                # O clique pode ter ficado sem confirmação mesmo quando o jogo
+                # iniciou a partida que este salto, seguido do HUD, comprova.
+                self._iniciar_espera_fila(agora)
+            if self._pendente in BOTOES_FILA or self._prazo_fila is not None:
+                self._transicao_hud = True
         if self._pendente:
             self.motivo_anti_afk = "verificando_clique"
             acao = self._verificar_clique(quadro, agora, hud_visivel, no_onibus,
