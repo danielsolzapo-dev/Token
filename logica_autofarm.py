@@ -61,6 +61,7 @@ class Config:
     rotina_aerea: bool = True
     atualizar_auto: bool = True
     resgatar_recompensas: bool = True
+    notificar_tesouros: bool = False
     webhook_url: str = field(default="", repr=False)
     regiao_auto: bool = False
     regiao_manha: str = MANHA[0]

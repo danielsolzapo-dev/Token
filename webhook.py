@@ -36,7 +36,7 @@ def validar_url(url):
     return url
 
 
-def enviar_webhook(url, quadro, nome, *, teste=False, texto_teste="", abrir=None):
+def enviar_webhook(url, quadro, nome, *, teste=False, texto_teste="", tesouro=False, abrir=None):
     url = validar_url(url)
     altura, largura = quadro.shape[:2]
     if max(altura, largura) > 1920:
@@ -50,6 +50,8 @@ def enviar_webhook(url, quadro, nome, *, teste=False, texto_teste="", abrir=None
         raise ErroWebhook("Não foi possível preparar a captura.")
 
     titulo = "Teste de webhook" if teste else "Recompensa resgatada"
+    if tesouro and not teste:
+        titulo = "Tesouro elemental encontrado"
     nome = " ".join((nome or "Nome indisponível na captura").split())[:180]
     conteudo = f"{titulo} — {nome}"
     if teste and texto_teste.strip():

@@ -24,6 +24,7 @@ from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPL
 from painel_tema import ACENTO, AMBAR, BG, TemaPainel, carregar_inter, escurecer_titulo
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, NORTE, regiao_por_horario
 from relogio_painel import RelogioPainel
+from tesouros import DetectorTesouros, monitorar_tesouros
 from versao import VERSAO
 from webhook import ErroWebhook, enviar_webhook, validar_url
 from windows_game import Windows
@@ -34,7 +35,7 @@ FINALIZANDO_LEITURA = "Controles liberados. Finalizando a leitura da tela…"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
-          "atualizar_auto", "resgatar_recompensas", "regiao_auto")
+          "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto")
 CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
@@ -309,6 +310,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     finally:
         if diagnostico:
             diagnostico.registrar("sessao_encerrada", pausada=parar.is_set())
+        parar.set()
         fluxo.pausar()
 
 
@@ -527,11 +529,14 @@ class Painel:
         painel = ttk.Frame(janela, padding=20)
         painel.pack(fill="both", expand=True)
         resgatar = tk.BooleanVar(janela, self.config.resgatar_recompensas)
+        tesouros = tk.BooleanVar(janela, self.config.notificar_tesouros)
         url = tk.StringVar(janela, self.config.webhook_url)
         item = tk.StringVar(janela, "Picareta de teste")
         mensagem = tk.StringVar(janela, "Este é um teste do Auto Farm.")
         ttk.Checkbutton(painel, text="Resgatar recompensas automaticamente no lobby",
                         variable=resgatar).pack(anchor="w")
+        ttk.Checkbutton(painel, text="Notificar tesouros elementais encontrados",
+                        variable=tesouros).pack(anchor="w", pady=(6, 0))
         ttk.Label(painel, text="URL do webhook (Discord ou compatível)").pack(anchor="w", pady=(12, 2))
         entrada = ttk.Entry(painel, textvariable=url, width=62, show="•")
         entrada.pack(fill="x")
@@ -541,7 +546,8 @@ class Painel:
         ttk.Entry(painel, textvariable=mensagem).pack(fill="x")
         comandos = ttk.Frame(painel)
         comandos.pack(fill="x", pady=(12, 6))
-        ttk.Button(comandos, text="Salvar", command=lambda: self.salvar_webhook(url.get(), resgatar.get())).pack(side="left")
+        ttk.Button(comandos, text="Salvar", command=lambda: self.salvar_webhook(
+            url.get(), resgatar.get(), tesouros.get())).pack(side="left")
         self.botao_teste_webhook = ttk.Button(
             comandos, text="Testar com tela atual",
             command=lambda: self.testar_webhook(url.get(), item.get(), mensagem.get())
@@ -554,9 +560,11 @@ class Painel:
         ttk.Label(painel, textvariable=self.status_webhook, style="Info.TLabel",
                   wraplength=440).pack(anchor="w", pady=(6, 0))
 
-    def salvar_webhook(self, url, resgatar):
+    def salvar_webhook(self, url, resgatar, tesouros=None):
         url = url.strip()
-        config = replace(self.config, webhook_url=url, resgatar_recompensas=resgatar)
+        tesouros = self.config.notificar_tesouros if tesouros is None else tesouros
+        alteracoes = dict(webhook_url=url, resgatar_recompensas=resgatar, notificar_tesouros=tesouros)
+        config = replace(self.config, **alteracoes)
         try:
             if url:
                 validar_url(url)
@@ -569,8 +577,9 @@ class Painel:
             return
         self.config = config
         self.opcoes["resgatar_recompensas"].set(resgatar)
+        self.opcoes["notificar_tesouros"].set(tesouros)
         if self.fluxo is not None:
-            self.fluxo.config = replace(self.fluxo.config, webhook_url=url, resgatar_recompensas=resgatar)
+            self.fluxo.config = replace(self.fluxo.config, **alteracoes)
         self.status_webhook.set("Webhook salvo." if url else "Envio de webhook desativado.")
 
     def testar_webhook(self, url, nome, mensagem):
@@ -585,17 +594,19 @@ class Painel:
         self.janela.after(3000, lambda: self.iniciar_envio_webhook(
             url, nome=nome.strip() or "Picareta de teste", teste=True, mensagem=mensagem))
 
-    def iniciar_envio_webhook(self, url, nome, quadro=None, *, teste=False, mensagem=""):
-        Thread(target=self._enviar_webhook, args=(url, nome, quadro, teste, mensagem), daemon=True).start()
+    def iniciar_envio_webhook(self, url, nome, quadro=None, *, teste=False, mensagem="", tesouro=False):
+        Thread(target=self._enviar_webhook, args=(url, nome, quadro, teste, mensagem, tesouro), daemon=True).start()
 
-    def _enviar_webhook(self, url, nome, quadro, teste, mensagem):
+    def _enviar_webhook(self, url, nome, quadro, teste, mensagem, tesouro):
         try:
             if quadro is None:
                 jogo = self.windows.fortnite_em_foco()
                 quadro = (self.windows.capturar(jogo) if jogo else
                           cv2.cvtColor(np.asarray(ImageGrab.grab().convert("RGB")), cv2.COLOR_RGB2BGR))
-            enviar_webhook(url, quadro, nome, teste=teste, texto_teste=mensagem)
+            enviar_webhook(url, quadro, nome, teste=teste, texto_teste=mensagem, tesouro=tesouro)
             texto = "Teste enviado." if teste else "Recompensa enviada ao webhook."
+            if tesouro:
+                texto = "Tesouro enviado ao webhook."
             sucesso = True
         except ErroWebhook as erro:
             texto, sucesso = str(erro), False
@@ -772,6 +783,8 @@ class Painel:
         self.parar = Event()
         self.worker = Thread(target=monitorar, args=(self.windows, self.fluxo, self.eventos, self.parar, self.diagnostico))
         self.worker.start()
+        Thread(target=monitorar_tesouros,
+               args=(self.windows, self.fluxo, self.eventos, self.parar, self.diagnostico), daemon=True).start()
 
     def atualizar_pausa(self):
         if self.worker is None:
@@ -866,6 +879,11 @@ class Painel:
                 url, nome, quadro = valor
                 if url == self.config.webhook_url:
                     self.iniciar_envio_webhook(url, nome, quadro)
+            elif evento == "tesouro_webhook":
+                url, nome, quadro, sessao = valor
+                if (sessao is self.parar and not sessao.is_set() and self.config.notificar_tesouros
+                        and url == self.config.webhook_url):
+                    self.iniciar_envio_webhook(url, nome, quadro, tesouro=True)
             elif evento == "resultado_webhook":
                 teste, sucesso, texto = valor
                 if teste:
@@ -898,6 +916,7 @@ class Painel:
 
 def verificar_build():
     detector = Detector()
+    DetectorTesouros()
     if faltando := TEMPLATES.keys() - detector.templates.keys():
         raise RuntimeError("Imagens ausentes no pacote: " + ", ".join(sorted(faltando)))
     for nome, (x, y) in (("jogar", (650, 210)), ("continuar", (650, 448)), ("lobby_pronto", (20, 420)),

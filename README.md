@@ -32,6 +32,8 @@ O tempo padrão é 7,5 minutos. O painel sinaliza modo espectador e registra par
 
 Em **Recompensas e webhook**, você pode ativar o resgate quando a tela de itens adquiridos aparecer antes de uma nova fila. Cole a URL HTTPS do Discord ou de um endpoint compatível com seus anexos e clique em **Salvar**. Depois que o botão de resgate some, o app envia a captura do Fortnite feita antes do clique e o nome lido na tela. Se o nome estiver ilegível, o aviso informa isso e envia a captura. **Testar com tela atual** aguarda três segundos e envia a imagem do Fortnite em primeiro plano ou do monitor principal, com o nome de teste escolhido. [Formato do webhook do Discord](https://docs.discord.com/developers/resources/webhook#execute-webhook)
 
+Marque **Notificar tesouros elementais encontrados** para receber avisos de descoberta no mesmo webhook. O alerta inclui uma captura do Fortnite e identifica o Acelerador de Extração, o Extrator Portátil, os Fogos de Artifício Dourados, o Localizador de Elementais ou o Localizador da Sorte quando o ícone está legível.
+
 Em **Regiões por horário**, ative a programação para Construção e Zero Build. O app usa Brasília (UTC−3) e tenta ajustar a região antes de entrar na fila pelo lobby. Das 00h às 06h, usa NA-Oeste. Das 06h às 11h, você pode escolher Ásia ou Oceania. Das 11h às 18h, usa Europa. Das 18h à meia-noite, você pode escolher Brasil, NA-Leste ou NA-Central. As preferências da América do Norte usam a subregião quando essa opção aparece no jogo. [Configurações de pareamento da Epic](https://www.epicgames.com/help/c-ategory_fortnite/c-fortnite_gameplay/a10221394)
 
 ## Enviar um diagnóstico
@@ -57,7 +59,7 @@ Inicie, teste e compile:
 ```powershell
 py -3.14 app.py
 py -3.14 -m unittest discover -s tests -v
-py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py painel_tema.py regiao.py relogio_painel.py texto_tela.py webhook.py windows_game.py
+py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py painel_tema.py regiao.py relogio_painel.py tesouros.py texto_tela.py webhook.py windows_game.py
 py -3.14 app.py --verificar-build
 py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" --add-data "fontes;fontes" app.py
 ```
