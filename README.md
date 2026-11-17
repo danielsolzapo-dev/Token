@@ -20,11 +20,15 @@ O contador avança uma vez por fila reconhecida. Depois que o app tenta entrar n
 
 O anti-AFK fica bloqueado no ônibus, no inventário, em modo espectador, com HUD indisponível ou durante pausa ou perda de foco. A janela e suas coordenadas são validadas antes de cada ação e entre segmentos de entrada. O Windows recebe entradas globais; essas verificações reduzem o risco de enviar comandos fora do jogo, mas não eliminam a corrida entre a última validação e o envio.
 
-A rotina aérea opcional salta com **Espaço** após duas leituras do aviso do ônibus. O reconhecimento usa a imagem de referência ou o texto do aviso. Funciona também ao iniciar o app já no ônibus. Se o aviso de asa-delta permanecer visível por 8 segundos após o salto, envia **Espaço** uma vez.
+A rotina aérea opcional salta com **Espaço** após duas leituras do aviso do ônibus. O reconhecimento usa a imagem de referência ou o texto do aviso. Funciona também ao iniciar o app já no ônibus. Duas leituras de **Entrar em queda livre** enviam **Espaço** para fechar a asa-delta uma vez por descida.
 
 O anti-AFK mantém **W** nas caminhadas e alterna diagonais com **A** e **D**. Com o cursor capturado e fora da transição aérea reconhecida, gira a câmera e envia dois cliques esquerdos com o item que já está na mão.
 
 O tempo padrão é 7,5 minutos. O painel sinaliza modo espectador e registra pares de barras de companheiros após três leituras estáveis, sem usar uma ausência de barras para decidir sair.
+
+**Próxima saída** mostra a contagem regressiva do prazo usado pela saída automática. O painel mostra um traço quando a automação está pausada ou não há saída programada. **Farmando** soma o tempo ativo desde que o app foi aberto, incluindo lobby e fila, e congela durante as pausas.
+
+**Atualizar automaticamente** consulta as releases do GitHub ao abrir e a cada hora. Quando o app fica pausado, o atualizador valida o tamanho e o SHA-256 do executável, guarda a versão anterior como `.previous` e reinicia o app. Use **Verificar** para consultar manualmente.
 
 ## Enviar um diagnóstico
 
@@ -49,7 +53,7 @@ Inicie, teste e compile:
 ```powershell
 py -3.14 app.py
 py -3.14 -m unittest discover -s tests -v
-py -3.14 -m py_compile app.py diagnostico.py embarque.py logica_autofarm.py texto_tela.py windows_game.py
+py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py relogio_painel.py texto_tela.py windows_game.py
 py -3.14 app.py --verificar-build
 py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" app.py
 ```

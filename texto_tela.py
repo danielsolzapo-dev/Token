@@ -53,6 +53,11 @@ def combinar(linhas, *, vertical=False):
 
 
 def identificar(linhas, largura, altura, tipo, *, sinalizar_ambiguidade=False):
+    if tipo == "fechar_asa":
+        rotulos = {"ENTRAR EM QUEDA LIVRE", "PARA ENTRAR EM QUEDA LIVRE", "ESPACO PARA ENTRAR EM QUEDA LIVRE",
+                   "PARA FECHAR ASA DELTA", "PARA FECHAR A ASA DELTA", "ESPACO PARA FECHAR ASA DELTA",
+                   "ESPACO PARA FECHAR A ASA DELTA", "TO SKYDIVE", "SPACE TO SKYDIVE", "PRESS SPACE TO SKYDIVE"}
+        return next((linha for linha in combinar(linhas) if normalizar(linha.texto) in rotulos), None)
     if tipo == "pular_onibus":
         rotulos = {"PARA PULAR", "ESPACO PARA PULAR", "SPACE PARA PULAR",
                    "APERTE ESPACO PARA PULAR", "PRESSIONE ESPACO PARA PULAR",
@@ -155,6 +160,8 @@ def identificar(linhas, largura, altura, tipo, *, sinalizar_ambiguidade=False):
 class Reconhecedor:
     def __init__(self):
         self.dialogo_ambiguo = False
+        self._quadro_lido = None
+        self._linhas = []
         modelos = Path(__file__).resolve().with_name("modelos")
         det = modelos / "PP-OCRv6_det_small.onnx"
         rec = modelos / "latin_PP-OCRv5_rec_mobile.onnx"
@@ -171,15 +178,15 @@ class Reconhecedor:
 
     def ler(self, quadro, tipo):
         altura, largura = quadro.shape[:2]
-        resultado = self.ocr(quadro, use_cls=False)
-        if resultado.boxes is None:
-            if tipo == "confirmar_sair":
-                self.dialogo_ambiguo = False
-            return None
-        linhas = [Linha(texto, cv2.boundingRect(caixa.astype("float32")))
-                  for caixa, texto, score in zip(resultado.boxes, resultado.txts, resultado.scores)
-                  if score >= 0.78]
-        linha = identificar(linhas, largura, altura, tipo, sinalizar_ambiguidade=True)
+        if self._quadro_lido is not quadro:
+            resultado = self.ocr(quadro, use_cls=False)
+            self._linhas = [] if resultado.boxes is None else [
+                Linha(texto, cv2.boundingRect(caixa.astype("float32")))
+                for caixa, texto, score in zip(resultado.boxes, resultado.txts, resultado.scores)
+                if score >= 0.78
+            ]
+            self._quadro_lido = quadro
+        linha = identificar(self._linhas, largura, altura, tipo, sinalizar_ambiguidade=True)
         if tipo == "confirmar_sair":
             self.dialogo_ambiguo = linha is AMBIGUO
         return None if linha is AMBIGUO else linha

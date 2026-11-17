@@ -13,18 +13,17 @@ class Embarque:
 
     def pausar(self):
         self.quadros_onibus = 0
-        self.asa_desde = None
+        self.quadros_asa = 0
 
-    def observar(self, agora, *, onibus, asa):
+    def observar(self, *, onibus, asa):
         self.quadros_onibus = self.quadros_onibus + 1 if onibus else 0
-        if self.saltou_em is None:
+        if onibus:
+            self.quadros_asa = 0
+            if self.saltou_em is not None:
+                return None
             return "saltar_onibus" if self.quadros_onibus >= 2 else None
-        if not asa or self.fechou_asa or agora - self.saltou_em > 120:
-            self.asa_desde = None
-            return None
-        if self.asa_desde is None:
-            self.asa_desde = agora
-        return "fechar_asa" if agora - self.asa_desde >= 8 else None
+        self.quadros_asa = self.quadros_asa + 1 if asa else 0
+        return "fechar_asa" if not self.fechou_asa and self.quadros_asa >= 2 else None
 
     def registrar(self, tipo, enviado, agora):
         if not enviado:

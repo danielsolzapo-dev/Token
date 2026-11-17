@@ -1,0 +1,35 @@
+"""Tempos do painel, calculados a partir de instantes monotônicos."""
+
+import math
+
+
+def _formatar(segundos):
+    horas, resto = divmod(max(0, segundos), 3600)
+    minutos, segundos = divmod(resto, 60)
+    return f"{horas:02d}:{minutos:02d}:{segundos:02d}" if horas else f"{minutos:02d}:{segundos:02d}"
+
+
+class RelogioPainel:
+    def __init__(self):
+        self._inicio = None
+        self._acumulado = 0.0
+        self._ja_iniciou = False
+        self.prazo_saida = None
+
+    def iniciar(self, agora):
+        if self._inicio is None:
+            self._inicio = agora
+            self._ja_iniciou = True
+
+    def pausar(self, agora):
+        if self._inicio is not None:
+            self._acumulado += max(0.0, agora - self._inicio)
+            self._inicio = None
+
+    def valores(self, agora):
+        ativo = self._inicio is not None
+        farm = self._acumulado
+        if ativo:
+            farm += max(0.0, agora - self._inicio)
+        saida = _formatar(math.ceil(self.prazo_saida - agora)) if ativo and self.prazo_saida is not None else "—"
+        return saida, _formatar(int(farm)) if self._ja_iniciou else "—"

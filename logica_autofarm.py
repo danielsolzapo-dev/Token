@@ -52,6 +52,7 @@ class Config:
     minutos_partida: float = 7.5
     anti_afk: bool = True
     rotina_aerea: bool = True
+    atualizar_auto: bool = True
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ class Detector:
         self.config = config
         self.leitor = leitor
         self._ultimo_texto = None
+        self._recorte_avisos = None
         self.dialogo_ambiguo = False
         pasta = Path(pasta) if pasta else Path(__file__).with_name("templates")
         self.templates = {}
@@ -250,14 +252,22 @@ class Detector:
         return bool(self.ler_contexto(margem, "pronto_lobby"))
 
     def aviso_onibus(self, quadro):
-        candidato = self.buscar_template(quadro, "onibus", 0.8)
+        return self._aviso_aereo(quadro, "onibus", "pular_onibus")
+
+    def aviso_asa(self, quadro):
+        return self._aviso_aereo(quadro, "asa_delta", "fechar_asa")
+
+    def _aviso_aereo(self, quadro, nome, tipo_texto):
+        candidato = self.buscar_template(quadro, nome, 0.8)
         score = candidato.score if candidato else 0.0
         if score >= 0.8:
             return candidato, score
         recorte, _, _ = _roi(quadro, (0.46, 0.42, 0.90, 0.69))
         if score >= 0.48 or self._faixa_texto_claro(recorte, quadro.shape[0]):
-            ampliado = _resize(recorte, 1.5)
-            texto = self.ler_contexto(ampliado, "pular_onibus")
+            if self._recorte_avisos is None or self._recorte_avisos[0] is not quadro:
+                self._recorte_avisos = quadro, _resize(recorte, 1.5)
+            ampliado = self._recorte_avisos[1]
+            texto = self.ler_contexto(ampliado, tipo_texto)
             if texto:
                 return texto, score
         return None, score
@@ -500,6 +510,12 @@ class Fluxo:
         self._inicio_hud_novo = None
         self._movimento_exige_transicao = False
 
+    @property
+    def prazo_saida(self):
+        if self.inicio_partida is not None and self.config.sair_por_tempo:
+            return self.inicio_partida + self.config.minutos_partida * 60
+        return None
+
     def rearmar_fila(self):
         """Permite uma nova tentativa somente após ação explícita de iniciar."""
         if self._fila_contada and not self._fila_expirada:
@@ -677,24 +693,25 @@ class Fluxo:
                 self._inicio_hud_novo = None
         hud_visivel = partida if hud_visivel is None else hud_visivel
         onibus_novo = no_onibus and (not self._onibus_visivel_no_clique or self._transicao_hud)
-        aereo_autorizado = onibus_novo or self.embarque.saltou_em is not None
-        replay_na_tela = (no_onibus and self._pendente is None and self._prazo_fila is None
+        aereo_autorizado = onibus_novo or asa_delta or self.embarque.saltou_em is not None
+        replay_na_tela = ((no_onibus or asa_delta) and self._pendente is None and self._prazo_fila is None
                           and self._procurar(quadro, "jogar", "continuar"))
         if (self.config.rotina_aerea and aereo_autorizado and not espectando and not replay_na_tela
                 and self._prazo_menu is None and self._prazo_lobby is None):
-            fase = self.embarque.observar(agora, onibus=onibus_novo, asa=asa_delta)
+            fase = self.embarque.observar(onibus=onibus_novo, asa=asa_delta)
             if fase:
                 self.motivo_anti_afk = "rotina_aerea"
                 self._proxima_acao = agora + 1
                 return Acao(fase, passos=ACOES_AEREAS[fase])
         else:
             self.embarque.pausar()
-        if onibus_novo and not replay_na_tela and self._pendente is None and self._prazo_fila is None:
-            self.motivo_anti_afk = "aviso_de_onibus"
+        if (onibus_novo or asa_delta) and not replay_na_tela and self._pendente is None and self._prazo_fila is None:
+            self.motivo_anti_afk = "aviso_de_onibus" if onibus_novo else "asa_delta"
             return None
         if self._pendente:
             self.motivo_anti_afk = "verificando_clique"
-            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus, partida or onibus_novo)
+            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus,
+                                          partida or onibus_novo or asa_delta)
         if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo >= 2:
@@ -758,9 +775,9 @@ class Fluxo:
         if partida or espectando:
             self._sem_leitura_desde = None
             self._aviso_leitura = False
-            if (self.inicio_partida is not None and self.config.sair_por_tempo
-                    and not inventario_aberto and not no_onibus and not asa_delta
-                    and agora - self.inicio_partida >= self.config.minutos_partida * 60):
+            prazo_saida = self.prazo_saida
+            if (prazo_saida is not None and agora >= prazo_saida
+                    and not inventario_aberto and not no_onibus and not asa_delta):
                 self._prazo_menu = agora + 10
                 self._proxima_acao = agora + 1
                 return Acao("esc")

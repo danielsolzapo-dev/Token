@@ -24,6 +24,9 @@ class TelaSimulada:
 
     def aviso_onibus(self, quadro):
         return None, 0.0
+
+    def aviso_asa(self, quadro):
+        return None, 0.0
     inventario = False
 
     def procurar(self, _, nomes, limiar=None):
@@ -106,9 +109,17 @@ class FluxoTest(unittest.TestCase):
         self.fluxo.embarque.registrar(salto.tipo, True, 4.8)
         self.assertIsNone(self.passo(5.4, no_onibus=True))
         self.assertIsNone(self.passo(6, asa_delta=True))
-        fechar = self.passo(14, asa_delta=True)
+        fechar = self.passo(6.2, asa_delta=True)
         self.assertEqual(fechar.tipo, "fechar_asa")
         self.assertEqual(self.fluxo.partidas, 1)
+
+    def test_fecha_asa_aberta_manualmente_com_dois_quadros(self):
+        self.assertIsNone(self.passo(0.2, asa_delta=True))
+        acao = self.passo(0.4, asa_delta=True)
+        self.assertEqual(acao.tipo, "fechar_asa")
+        self.assertEqual(acao.passos, (("teclas", (57,), 0.16),))
+        self.fluxo.embarque.registrar(acao.tipo, True, 0.57)
+        self.assertIsNone(self.passo(2, asa_delta=True))
 
     def test_pula_com_espaco_ao_ligar_dentro_do_onibus_sem_fila_do_app(self):
         self.assertIsNone(self.passo(0.2, no_onibus=True))

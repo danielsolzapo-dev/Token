@@ -6,17 +6,22 @@ import os
 from pathlib import Path
 from queue import Empty, SimpleQueue
 import sys
+from tempfile import TemporaryDirectory
 from threading import Event, Thread
 import time
 import tkinter as tk
 from tkinter import filedialog, ttk
+import webbrowser
 
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao,
+                         criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
 from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from relogio_painel import RelogioPainel
 from versao import VERSAO
 from windows_game import Windows
 
@@ -26,9 +31,12 @@ PAINEL = "#1b2230"
 TEXTO = "#f0f3f9"
 MUTED = "#aab7cb"
 ACENTO = "#afd45e"
+FUNDO_METRICA = "#10141c"
+TEXTO_METRICA = "#ffe600"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
-CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea", "minutos_partida")
+CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
+          "atualizar_auto", "minutos_partida")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
     "lobby_pronto": "Pronto", "menu_aba": "Abrir menu", "voltar_lobby": "Voltar ao lobby",
@@ -66,6 +74,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     proximo_registro = 0.0
     ultimo_tipo = None
     ordem = 0
+    prazo_anterior = fluxo.prazo_saida
+    eventos.put(("prazo_saida", prazo_anterior))
     proximo_esquadrao = 0.0
     candidato_esquadrao = contagem_esquadrao = None
     quadros_esquadrao = 0
@@ -93,8 +103,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 cursor = windows.cursor_visivel()
                 alvo_onibus, score_onibus = detector.aviso_onibus(quadro)
                 onibus = bool(alvo_onibus)
-                asa_delta = (fluxo.embarque.saltou_em is not None
-                             and detector.procurar(quadro, ("asa_delta",), 0.8) is not None)
+                alvo_asa, score_asa = detector.aviso_asa(quadro) if not onibus else (None, 0.0)
+                asa_delta = bool(alvo_asa)
                 contagem = fluxo.partidas
                 agora = time.monotonic()
                 if not partida or onibus or asa_delta:
@@ -121,6 +131,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                           bloqueio_hud=bloqueio_hud.nome if bloqueio_hud else None,
                                           score_onibus=round(score_onibus, 3),
                                           metodo_onibus=alvo_onibus.metodo if alvo_onibus else None,
+                                          score_asa=round(score_asa, 3),
+                                          metodo_asa=alvo_asa.metodo if alvo_asa else None,
                                           resolucao=[quadro.shape[1], quadro.shape[0]])
                     leituras_anteriores, proximo_registro = leituras, agora + 10
                 if detector.dialogo_ambiguo and not dialogo_ambiguo_anterior:
@@ -153,6 +165,10 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     fluxo.embarque.registrar(acao.tipo, executada, time.monotonic())
                 if fluxo.partidas != contagem:
                     eventos.put(("total", fluxo.partidas))
+                prazo_saida = fluxo.prazo_saida
+                if prazo_saida != prazo_anterior:
+                    eventos.put(("prazo_saida", prazo_saida))
+                    prazo_anterior = prazo_saida
                 if executada:
                     if acao.tipo == "clicar":
                         texto = "Clique enviado em " + ROTULOS.get(acao.alvo.nome, acao.alvo.nome)
@@ -169,7 +185,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                         texto = {
                             "esc": "Esc enviado",
                             "saltar_onibus": "Salto do ônibus enviado com Espaço.",
-                            "fechar_asa": "Comando para fechar a asa-delta enviado após 8 segundos.",
+                            "fechar_asa": "Espaço enviado após confirmar Entrar em queda livre.",
                             "movimento_menu": "Anti-AFK aguardando fechar o menu de saída.",
                             "clique_confirmado": "Botão saiu da tela",
                             "clique_ignorado": "Botão continua visível após três tentativas",
@@ -213,7 +229,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
         if diagnostico:
             diagnostico.registrar("sessao_encerrada", pausada=parar.is_set())
         fluxo.pausar()
-        eventos.put(("fim", None))
+        eventos.put(("fim", parar))
 
 
 def detectar_arquivo(caminho):
@@ -230,23 +246,30 @@ class Painel:
         self.config = config if config is not None else carregar_config()
         self.fluxo = None
         self.eventos = SimpleQueue()
+        self.eventos_atualizacao = SimpleQueue()
+        self.release_disponivel = self.atualizacao_preparada = self.operacao_atualizacao = None
         self.worker = self.parar = None
         self.f6_anterior = self.fechando = False
         self.f7_anterior = False
         self.status = tk.StringVar(janela, "Pausado")
-        self.atividade = tk.StringVar(janela, "A sessão começa quando você clicar em Iniciar.")
+        self.atividade = tk.StringVar(janela, "Clique em Iniciar no lobby ou já na partida.")
         self.total = tk.StringVar(janela, "0")
+        self.proxima_saida = tk.StringVar(janela, "—")
+        self.farmando = tk.StringVar(janela, "—")
+        self.relogio = RelogioPainel()
+        self.status_atualizacao = tk.StringVar(janela, f"Versão {VERSAO}")
         self.opcoes = {nome: tk.BooleanVar(janela, getattr(self.config, nome)) for nome in CAMPOS[:-1]}
         self.minutos = tk.StringVar(janela, f"{self.config.minutos_partida:g}".replace(".", ","))
 
         janela.title(f"Auto Farm · {VERSAO}")
         janela.configure(bg=BG)
-        janela.minsize(590, 555)
-        janela.geometry("650x580")
+        janela.minsize(590, 650)
+        janela.geometry("650x675")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         self.estilo()
         self.montar()
         janela.after(45, self.atualizar)
+        janela.after(1000, self.verificar_automaticamente)
 
     def estilo(self):
         estilo = ttk.Style(self.janela)
@@ -257,7 +280,13 @@ class Painel:
         estilo.configure("Info.TLabel", foreground=MUTED)
         estilo.configure("CardInfo.TLabel", foreground=MUTED, background=PAINEL)
         estilo.configure("Titulo.TLabel", font=("Segoe UI", 25, "bold"))
-        estilo.configure("Numero.TLabel", font=("Segoe UI", 24, "bold"), background=PAINEL)
+        estilo.configure("Metrica.TFrame", background=FUNDO_METRICA)
+        estilo.configure("MetricaTitulo.TLabel", background=FUNDO_METRICA, foreground=MUTED,
+                         font=("Segoe UI", 9, "bold"))
+        estilo.configure("MetricaValor.TLabel", background=FUNDO_METRICA, foreground=TEXTO_METRICA,
+                         font=("Segoe UI", 19, "bold"))
+        estilo.configure("MetricaVazia.TLabel", background=FUNDO_METRICA, foreground=MUTED,
+                         font=("Segoe UI", 19, "bold"))
         estilo.configure("Status.TLabel", foreground=ACENTO, background=PAINEL,
                          font=("Segoe UI", 12, "bold"))
         estilo.configure("TCheckbutton", indicatorcolor=PAINEL)
@@ -277,19 +306,27 @@ class Painel:
                   style="Info.TLabel").pack(anchor="w", pady=(0, 18))
         resumo = ttk.Frame(painel, style="Card.TFrame", padding=(16, 12))
         resumo.pack(fill="x")
-        esquerda = ttk.Frame(resumo, style="Card.TFrame")
-        esquerda.pack(side="left", fill="both", expand=True)
-        ttk.Label(esquerda, textvariable=self.status, style="Status.TLabel", wraplength=385).pack(anchor="w")
-        ttk.Label(esquerda, textvariable=self.atividade, style="CardInfo.TLabel", wraplength=385).pack(anchor="w")
-        direita = ttk.Frame(resumo, style="Card.TFrame")
-        direita.pack(side="right", padx=(12, 0))
-        ttk.Label(direita, textvariable=self.total, style="Numero.TLabel").pack(anchor="e")
-        ttk.Label(direita, text="Reinícios nesta sessão", style="CardInfo.TLabel").pack(anchor="e")
+        ttk.Label(resumo, textvariable=self.status, style="Status.TLabel", wraplength=485).pack(anchor="w")
+        ttk.Label(resumo, textvariable=self.atividade, style="CardInfo.TLabel", wraplength=485).pack(anchor="w")
+        metricas = ttk.Frame(resumo, style="Card.TFrame")
+        metricas.pack(fill="x", pady=(10, 0))
+        for coluna, (titulo, valor) in enumerate((
+            ("PARTIDAS", self.total), ("PRÓXIMA SAÍDA", self.proxima_saida), ("FARMANDO", self.farmando),
+        )):
+            metricas.columnconfigure(coluna, weight=1, uniform="metricas")
+            cartao = ttk.Frame(metricas, padding=(12, 7), style="Metrica.TFrame")
+            cartao.grid(row=0, column=coluna, sticky="nsew", padx=(0, 6 if coluna < 2 else 0))
+            ttk.Label(cartao, text=titulo, style="MetricaTitulo.TLabel").pack(anchor="w")
+            estilo_valor = "MetricaVazia.TLabel" if valor is self.proxima_saida else "MetricaValor.TLabel"
+            rotulo = ttk.Label(cartao, textvariable=valor, style=estilo_valor)
+            rotulo.pack(anchor="w")
+            if valor is self.proxima_saida:
+                self.rotulo_proxima_saida = rotulo
         for nome, texto in (
             ("clicar_continuar", "Clicar em Continuar após a eliminação"),
             ("fallback_cor", "Procurar Jogar Novamente pela cor"),
             ("anti_afk", "Ativar movimento anti-AFK"),
-            ("rotina_aerea", "Saltar com Espaço e fechar asa-delta após 8 s"),
+            ("rotina_aerea", "Saltar e fechar a asa-delta com Espaço"),
             ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
         ):
             ttk.Checkbutton(painel, text=texto, variable=self.opcoes[nome]).pack(anchor="w", pady=(10, 0))
@@ -307,6 +344,127 @@ class Painel:
         ttk.Label(comandos, text="F6 inicia ou pausa", style="Info.TLabel").pack(side="right")
         ttk.Label(painel, text="F7 marca uma falha no diagnóstico durante a sessão.",
                   style="Info.TLabel").pack(anchor="w", pady=(8, 0))
+        atualizacao = ttk.Frame(painel)
+        atualizacao.pack(fill="x", pady=(13, 0))
+        ttk.Checkbutton(atualizacao, text="Atualizar automaticamente", variable=self.opcoes["atualizar_auto"],
+                        command=self.salvar_preferencia_atualizacao).pack(side="left")
+        self.botao_atualizacao = ttk.Button(atualizacao, text="Verificar", command=self.acao_atualizacao)
+        self.botao_atualizacao.pack(side="right")
+        ttk.Label(painel, textvariable=self.status_atualizacao, style="Info.TLabel",
+                  wraplength=515).pack(anchor="w", pady=(4, 0))
+
+    def salvar_preferencia_atualizacao(self):
+        self.config = replace(self.config, atualizar_auto=self.opcoes["atualizar_auto"].get())
+        try:
+            salvar_config(self.config)
+        except OSError:
+            self.status_atualizacao.set("Não foi possível salvar o ajuste de atualização.")
+        if self.config.atualizar_auto:
+            self.verificar_atualizacoes()
+
+    def verificar_automaticamente(self):
+        if self.fechando:
+            return
+        if self.opcoes["atualizar_auto"].get() and self.release_disponivel is None:
+            self.verificar_atualizacoes()
+        self.janela.after(3600000, self.verificar_automaticamente)
+
+    def verificar_atualizacoes(self):
+        if self.operacao_atualizacao or self.fechando:
+            return
+        self.operacao_atualizacao = "consulta"
+        self.status_atualizacao.set("Verificando atualizações…")
+        self.botao_atualizacao.state(["disabled"])
+        Thread(target=self._consultar_release, daemon=True).start()
+
+    def _consultar_release(self):
+        try:
+            self.eventos_atualizacao.put(("release", buscar_atualizacao(VERSAO)))
+        except (ErroAtualizacao, OSError) as erro:
+            self.eventos_atualizacao.put(("erro", str(erro)))
+
+    def acao_atualizacao(self):
+        if self.release_disponivel is None:
+            self.verificar_atualizacoes()
+        elif getattr(sys, "frozen", False):
+            self._baixar_release()
+        else:
+            webbrowser.open(self.release_disponivel.pagina)
+
+    def _baixar_release(self):
+        if self.operacao_atualizacao or self.fechando:
+            return
+        if self.worker is not None and self.worker.is_alive():
+            self.status_atualizacao.set("Pause a automação para instalar a atualização.")
+            return
+        self.operacao_atualizacao = "download"
+        self.botao_atualizacao.state(["disabled"])
+        self.status_atualizacao.set(f"Baixando e verificando a v{self.release_disponivel.versao}…")
+        Thread(target=self._preparar_release, args=(self.release_disponivel,), daemon=True).start()
+
+    def _preparar_release(self, release):
+        pasta = CONFIG.parent / "updates"
+        pronto = None
+        try:
+            pasta.mkdir(parents=True, exist_ok=True)
+            with TemporaryDirectory(dir=pasta) as temporaria:
+                baixado = baixar_atualizacao(release, temporaria)
+                pronto = preparar_executavel(baixado, sys.executable, release.sha256)
+                script = criar_script_instalacao(pronto, sys.executable, os.getpid(), pasta, release.sha256)
+            self.eventos_atualizacao.put(("preparada", (pronto, script)))
+        except (ErroAtualizacao, OSError) as erro:
+            if pronto is not None:
+                try:
+                    pronto.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            self.eventos_atualizacao.put(("erro", str(erro)))
+
+    def _processar_atualizacao(self):
+        while True:
+            try:
+                evento, valor = self.eventos_atualizacao.get_nowait()
+            except Empty:
+                break
+            if evento == "release":
+                self.operacao_atualizacao = None
+                self.release_disponivel = valor
+                self.botao_atualizacao.state(["!disabled"])
+                self.botao_atualizacao.configure(text="Atualizar" if valor else "Verificar")
+                self.status_atualizacao.set(f"v{valor.versao} disponível." if valor else f"v{VERSAO} atualizada.")
+            elif evento == "preparada":
+                self.atualizacao_preparada = valor
+            else:
+                self.operacao_atualizacao = self.release_disponivel = None
+                self.botao_atualizacao.state(["!disabled"])
+                self.botao_atualizacao.configure(text="Tentar novamente")
+                self.status_atualizacao.set(valor)
+        if self.fechando or (self.worker is not None and self.worker.is_alive()):
+            return
+        if self.atualizacao_preparada:
+            executavel, script = self.atualizacao_preparada
+            self.atualizacao_preparada = None
+            try:
+                iniciar_instalacao(script)
+            except (ErroAtualizacao, OSError) as erro:
+                self.release_disponivel = self.operacao_atualizacao = None
+                self.botao_atualizacao.state(["!disabled"])
+                self.botao_atualizacao.configure(text="Tentar novamente")
+                self.status_atualizacao.set(str(erro))
+                try:
+                    executavel.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            else:
+                self.status_atualizacao.set("Instalando a atualização. O app será reiniciado.")
+                self.fechar()
+            finally:
+                try:
+                    script.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        elif self.release_disponivel and self.opcoes["atualizar_auto"].get() and getattr(sys, "frozen", False):
+            self._baixar_release()
 
     def copiar_diagnostico(self):
         try:
@@ -330,6 +488,7 @@ class Painel:
 
     def alternar(self):
         if self.worker is not None and self.worker.is_alive():
+            self.relogio.pausar(time.monotonic())
             self.parar.set()
             self.botao.state(["disabled"])
             self.status.set("Pausando")
@@ -352,6 +511,8 @@ class Painel:
             self.fluxo.config = self.fluxo.detector.config = config
         if self.fluxo.rearmar_fila() and self.diagnostico:
             self.diagnostico.registrar("espera_fila_rearmada_por_iniciar")
+        self.relogio.prazo_saida = self.fluxo.prazo_saida
+        self.relogio.iniciar(time.monotonic())
         self.status.set("Iniciando")
         self.botao.configure(text="Pausar")
         self.parar = Event()
@@ -407,6 +568,7 @@ class Painel:
         imagem.pack()
 
     def atualizar(self):
+        self._processar_atualizacao()
         f6 = self.windows.f6()
         if not self.fechando and f6 and not self.f6_anterior and "disabled" not in self.botao.state():
             self.alternar()
@@ -426,12 +588,21 @@ class Painel:
                     self.status.set(valor)
             elif evento == "total":
                 self.total.set(str(valor))
+            elif evento == "prazo_saida":
+                self.relogio.prazo_saida = valor
             elif evento in ("acao", "erro"):
                 self.atividade.set(valor)
-            elif evento == "fim":
+            elif evento == "fim" and valor is self.parar:
+                self.relogio.pausar(time.monotonic())
                 self.status.set("Pausado")
                 self.botao.configure(text="Iniciar")
                 self.botao.state(["!disabled"])
+        saida, farmando = self.relogio.valores(time.monotonic())
+        if saida != self.proxima_saida.get():
+            self.proxima_saida.set(saida)
+            self.rotulo_proxima_saida.configure(style="MetricaVazia.TLabel" if saida == "—" else "MetricaValor.TLabel")
+        if farmando != self.farmando.get():
+            self.farmando.set(farmando)
         if self.fechando and (self.worker is None or not self.worker.is_alive()):
             self.janela.destroy()
         else:
@@ -439,6 +610,7 @@ class Painel:
 
     def fechar(self):
         self.fechando = True
+        self.relogio.pausar(time.monotonic())
         if self.parar:
             self.parar.set()
 
@@ -472,6 +644,17 @@ def verificar_build():
     salto = fluxo_no_onibus.passo(onibus.copy(), 0.3, no_onibus=True)
     if salto is None or salto.passos != (("teclas", (57,), 0.16),):
         raise RuntimeError("O salto precisa enviar somente Espaço, inclusive sem fila iniciada pelo app.")
+    asa = np.zeros_like(onibus)
+    aviso = detector.templates["asa_delta"]
+    h, w = aviso.shape[:2]
+    asa[550:550 + h, 1150:1150 + w] = aviso
+    alvo_asa, _ = detector.aviso_asa(asa)
+    if alvo_asa is None:
+        raise RuntimeError("O aviso Entrar em queda livre não foi reconhecido.")
+    fluxo_asa = Fluxo(detector)
+    fluxo_asa.passo(asa, 0, asa_delta=True)
+    if (fechar_asa := fluxo_asa.passo(asa.copy(), 0.3, asa_delta=True)) is None or fechar_asa.tipo != "fechar_asa":
+        raise RuntimeError("O app precisa fechar a asa-delta após dois quadros consecutivos.")
     hud = np.zeros((540, 960, 3), dtype=np.uint8)
     hud[475:486, 32:105] = (0, 215, 145)
     if detector.em_partida(hud):

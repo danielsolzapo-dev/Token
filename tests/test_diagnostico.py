@@ -34,7 +34,7 @@ class DiagnosticoTest(unittest.TestCase):
         detector = SimpleNamespace(
             config=Config(), templates=TEMPLATES, dialogo_ambiguo=False,
             detectar=lambda _: None, procurar=lambda *_a, **_k: None, em_partida=lambda _: True,
-            barras_esquadrao=lambda _: None, aviso_onibus=lambda _: (None, 0.0),
+            barras_esquadrao=lambda _: None, aviso_onibus=lambda _: (None, 0.0), aviso_asa=lambda _: (None, 0.0),
         )
         fluxo = Fluxo(detector)
         def falhar(*_):

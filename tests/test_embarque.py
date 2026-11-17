@@ -10,24 +10,23 @@ from texto_tela import Linha, identificar
 
 
 class EmbarqueTest(unittest.TestCase):
-    def test_salto_estavel_e_asa_temporizada_sem_repeticao(self):
+    def test_salto_e_fechamento_da_asa_confirmados_sem_repeticao(self):
         embarque = Embarque()
-        self.assertIsNone(embarque.observar(0, onibus=True, asa=False))
-        self.assertEqual(embarque.observar(0.3, onibus=True, asa=False), "saltar_onibus")
+        self.assertIsNone(embarque.observar(onibus=True, asa=False))
+        self.assertEqual(embarque.observar(onibus=True, asa=False), "saltar_onibus")
         embarque.registrar("saltar_onibus", True, 0.8)
-        self.assertIsNone(embarque.observar(1, onibus=True, asa=False))
-        self.assertIsNone(embarque.observar(4, onibus=False, asa=True))
-        self.assertIsNone(embarque.observar(11.9, onibus=False, asa=True))
-        self.assertEqual(embarque.observar(12, onibus=False, asa=True), "fechar_asa")
-        embarque.registrar("fechar_asa", True, 12.2)
-        self.assertIsNone(embarque.observar(13, onibus=False, asa=True))
+        self.assertIsNone(embarque.observar(onibus=True, asa=False))
+        self.assertIsNone(embarque.observar(onibus=False, asa=True))
+        self.assertEqual(embarque.observar(onibus=False, asa=True), "fechar_asa")
+        embarque.registrar("fechar_asa", True, 4.2)
+        self.assertIsNone(embarque.observar(onibus=False, asa=True))
 
     def test_perda_de_foco_quebra_confirmacao_do_onibus(self):
         embarque = Embarque()
-        embarque.observar(0, onibus=True, asa=False)
+        embarque.observar(onibus=True, asa=False)
         embarque.pausar()
-        self.assertIsNone(embarque.observar(30, onibus=True, asa=False))
-        self.assertEqual(embarque.observar(30.3, onibus=True, asa=False), "saltar_onibus")
+        self.assertIsNone(embarque.observar(onibus=True, asa=False))
+        self.assertEqual(embarque.observar(onibus=True, asa=False), "saltar_onibus")
 
     def test_planejador_aleatorio_nao_envia_s(self):
         rng = random.Random(17)
@@ -66,6 +65,12 @@ class LeituraDiagnosticoTest(unittest.TestCase):
         self.assertEqual(identificar([aviso], 300, 90, "pular_onibus"), aviso)
         outro = Linha("ESPAÇO PARA ABRIR ASA-DELTA", (32, 8, 240, 24))
         self.assertIsNone(identificar([outro], 300, 90, "pular_onibus"))
+
+    def test_fechar_asa_reconhece_queda_livre_sem_abrir_asa(self):
+        queda = Linha("ESPAÇO PARA ENTRAR EM QUEDA LIVRE", (8, 8, 284, 24))
+        abrir = Linha("ESPAÇO PARA ABRIR ASA-DELTA", (32, 8, 240, 24))
+        self.assertEqual(identificar([queda], 300, 90, "fechar_asa"), queda)
+        self.assertIsNone(identificar([abrir], 300, 90, "fechar_asa"))
 
     def test_barras_do_esquadrao_exigem_pares_acima_do_hud_proprio(self):
         quadro = np.zeros((860, 1440, 3), dtype=np.uint8)
