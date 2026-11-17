@@ -1,0 +1,6 @@
+numpy==2.5.4
+opencv-python-headless==5.0.0.93
+pillow==13.0.0
+pyinstaller==6.22.3
+rapidocr==3.10.0
+onnxruntime==1.32.0
