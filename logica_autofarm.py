@@ -32,7 +32,7 @@ BOTOES_LOBBY = ("lobby_jogar", "lobby_pronto")
 BOTOES_FILA = ("jogar", *BOTOES_LOBBY)
 AVISOS = ("onibus", "asa_delta", "reinicializando")
 ACOES_AEREAS = {
-    "saltar_onibus": (("teclas", (48,), 0.12), ("pausa", 0.25), ("teclas", (57,), 0.16)),
+    "saltar_onibus": (("teclas", (57,), 0.16),),
     "fechar_asa": (("teclas", (57,), 0.16),),
 }
 
@@ -760,7 +760,12 @@ class Fluxo:
         self.motivo_anti_afk = "movimento_planejado"
         if agora >= self._proxima_caminhada:
             x, y, rumo = self._desvio
-            tecla = "S" if x * math.sin(math.radians(rumo)) + y * math.cos(math.radians(rumo)) > 1 else "W"
+            radianos = math.radians(rumo)
+            seno, cosseno = math.sin(radianos), math.cos(radianos)
+            frente, lateral = x * seno + y * cosseno, x * cosseno - y * seno
+            tecla = "W"
+            if frente > 1:
+                tecla = "A" if lateral > 0 else "D"
             duracao = 0.8
             x, y = _andar(x, y, rumo, tecla, duracao)
             self._desvio = x, y, rumo
@@ -781,9 +786,9 @@ class Fluxo:
         return Acao("movimento", passos=tuple(passos))
 
 
-TECLAS = {"W": 17, "A": 30, "S": 31, "D": 32}
-VETORES = {"W": (0, 1), "S": (0, -1), "A": (-1, 0), "D": (1, 0)}
-PESOS = {"W": 3.0, "A": 1.0, "D": 1.0, "S": 0.4}
+TECLAS = {"W": 17, "A": 30, "D": 32}
+VETORES = {"W": (0, 1), "A": (-1, 0), "D": (1, 0)}
+PESOS = {"W": 3.0, "A": 1.0, "D": 1.0}
 TIPOS = ("explorar", "andar", "camera", "picareta", "pular", "agachar", "ajeitar")
 HUMORES = {
     "calmo": ((6, 1.5, 1.5, 0.6, 0.5, 0.4, 0.3), 1.35),

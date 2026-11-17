@@ -163,7 +163,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     else:
                         texto = {
                             "esc": "Esc enviado",
-                            "saltar_onibus": "Agradecimento e salto enviados.",
+                            "saltar_onibus": "Salto do ônibus enviado com Espaço.",
                             "fechar_asa": "Comando para fechar a asa-delta enviado após 8 segundos.",
                             "movimento_menu": "Anti-AFK aguardando fechar o menu de saída.",
                             "clique_confirmado": "Botão saiu da tela",
@@ -284,7 +284,7 @@ class Painel:
             ("clicar_continuar", "Clicar em Continuar após a eliminação"),
             ("fallback_cor", "Procurar Jogar Novamente pela cor"),
             ("anti_afk", "Ativar movimento anti-AFK"),
-            ("rotina_aerea", "Agradecer, saltar e fechar asa-delta após 8 s"),
+            ("rotina_aerea", "Saltar com Espaço e fechar asa-delta após 8 s"),
             ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
         ):
             ttk.Checkbutton(painel, text=texto, variable=self.opcoes[nome]).pack(anchor="w", pady=(10, 0))

@@ -1,10 +1,11 @@
+import random
 import unittest
 
 import cv2
 import numpy as np
 
 from embarque import Embarque
-from logica_autofarm import Detector
+from logica_autofarm import Detector, HUMORES, plano_anti_afk
 from texto_tela import Linha, identificar
 
 
@@ -27,6 +28,17 @@ class EmbarqueTest(unittest.TestCase):
         embarque.pausar()
         self.assertIsNone(embarque.observar(30, onibus=True, asa=False))
         self.assertEqual(embarque.observar(30.3, onibus=True, asa=False), "saltar_onibus")
+
+    def test_planejador_aleatorio_nao_envia_s(self):
+        rng = random.Random(17)
+        desvio = (0.0, 0.0, 0.0)
+        for humor in HUMORES:
+            for camera in (False, True):
+                for _ in range(100):
+                    passos, desvio = plano_anti_afk(desvio, camera=camera, humor=humor, rng=rng)
+                    for passo in passos:
+                        if passo[0] in ("teclas", "andar_mouse"):
+                            self.assertNotIn(31, passo[1])
 
 
 class LeituraDiagnosticoTest(unittest.TestCase):

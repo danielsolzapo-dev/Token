@@ -99,7 +99,7 @@ class FluxoTest(unittest.TestCase):
         self.assertIsNone(self.passo(4, no_onibus=True))
         salto = self.passo(4.3, no_onibus=True)
         self.assertEqual(salto.tipo, "saltar_onibus")
-        self.assertEqual([passo[1] for passo in salto.passos if passo[0] == "teclas"], [(48,), (57,)])
+        self.assertEqual(salto.passos, (("teclas", (57,), 0.16),))
         self.fluxo.embarque.registrar(salto.tipo, True, 4.8)
         self.assertIsNone(self.passo(5.4, no_onibus=True))
         self.assertIsNone(self.passo(6, asa_delta=True))
@@ -338,6 +338,14 @@ class FluxoTest(unittest.TestCase):
         with patch("logica_autofarm.plano_anti_afk", return_value=([("mouse", 90, 0, 0.2)], (0, 0.8, 0))):
             self.assertEqual(self.passo(2, partida=True).passos, (("mouse", 90, 0, 0.2),))
             self.assertEqual(self.passo(6, partida=True).passos, (("teclas", (17,), 0.8),))
+
+    def test_hud_durante_queda_livre_nunca_dispara_caminhada_para_tras(self):
+        self.habilitar_movimento()
+        self.fluxo.embarque.registrar("saltar_onibus", True, 0)
+        self.fluxo._desvio = (0, 2, 0)
+        self.assertIsNone(self.passo(0.8, partida=True, asa_delta=False))
+        acao = self.passo(1.2, partida=True, asa_delta=False)
+        self.assertEqual(acao.passos, (("teclas", (32,), 0.8),))
 
     def test_perda_de_foco_exige_hud_reconfirmado_para_mover(self):
         self.habilitar_movimento()

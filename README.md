@@ -20,7 +20,7 @@ O contador avança uma vez por fila reconhecida. Depois que o app tenta entrar n
 
 O anti-AFK fica bloqueado no ônibus, no inventário, em modo espectador, com HUD indisponível ou durante pausa ou perda de foco. A janela e suas coordenadas são validadas antes de cada ação e entre segmentos de entrada. O Windows recebe entradas globais; essas verificações reduzem o risco de enviar comandos fora do jogo, mas não eliminam a corrida entre a última validação e o envio.
 
-A rotina aérea opcional agradece com **B** e salta com **Espaço** após duas leituras do aviso de ônibus em uma fila iniciada pelo app. Se o aviso de asa-delta permanecer visível por 8 segundos após o salto, envia **Espaço** uma vez. O tempo padrão é 7,5 minutos. O painel sinaliza modo espectador e registra pares de barras de companheiros após três leituras estáveis, sem usar uma ausência de barras para decidir sair.
+A rotina aérea opcional salta com **Espaço** após duas leituras do aviso de ônibus em uma fila iniciada pelo app. Se o aviso de asa-delta permanecer visível por 8 segundos após o salto, envia **Espaço** uma vez. O movimento automático usa **W**, **A** e **D**, inclusive quando o HUD reaparece em queda livre. O tempo padrão é 7,5 minutos. O painel sinaliza modo espectador e registra pares de barras de companheiros após três leituras estáveis, sem usar uma ausência de barras para decidir sair.
 
 ## Enviar um diagnóstico
 
