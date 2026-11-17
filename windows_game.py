@@ -4,6 +4,7 @@ import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
 from queue import Empty, SimpleQueue
+import sys
 from threading import Event, Lock, Thread
 import time
 
@@ -16,6 +17,16 @@ F6 = 0x75
 F7 = 0x76
 WM_HOTKEY = 0x0312
 MOD_NOREPEAT = 0x4000
+
+
+def reduzir_prioridade_thread():
+    """Usa prioridade de fundo para a thread que chamou esta função."""
+    if sys.platform != "win32":
+        return
+    kernel = ctypes.WinDLL("kernel32")
+    kernel.GetCurrentThread.restype = wintypes.HANDLE
+    kernel.SetThreadPriority.argtypes = [wintypes.HANDLE, ctypes.c_int]
+    kernel.SetThreadPriority(kernel.GetCurrentThread(), -1)
 
 
 @dataclass(frozen=True)

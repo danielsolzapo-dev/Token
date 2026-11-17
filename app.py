@@ -27,7 +27,7 @@ from relogio_painel import RelogioPainel
 from tesouros import DetectorTesouros, monitorar_tesouros
 from versao import VERSAO
 from webhook import ErroWebhook, enviar_webhook, validar_url
-from windows_game import Windows
+from windows_game import Windows, reduzir_prioridade_thread
 
 
 SOLTANDO_CONTROLES = "Soltando os controles da automação…"
@@ -346,6 +346,8 @@ class Painel:
         self.janela_webhook = self.botao_teste_webhook = None
         self.janela_regiao = None
         self.teste_webhook_em_curso = False
+        self._pausado_visual = None
+        self._proximo_relogio = 0.0
 
         janela.title(f"Auto Farm {VERSAO}")
         janela.configure(bg=BG)
@@ -366,6 +368,9 @@ class Painel:
 
     def decorar_estado(self, *_):
         pausado = self.status.get() in ("Pausado", "Pausando")
+        if pausado == self._pausado_visual:
+            return
+        self._pausado_visual = pausado
         self.rotulo_estado.configure(style="Pausado.TLabel" if pausado else "Status.TLabel")
         self.icone_estado.configure(image=self.tema.icone(
             "pausa" if pausado else "play", AMBAR if pausado else ACENTO, 22))
@@ -437,10 +442,10 @@ class Painel:
         comandos = ttk.Frame(painel)
         comandos.pack(fill="x")
         self.botao = self.botao_com_icone(comandos, "Iniciar", "play", self.alternar, principal=True)
-        for coluna, botao in enumerate((
-            self.botao, self.botao_com_icone(comandos, "Testar imagem", "imagem", self.testar),
-            self.botao_com_icone(comandos, "Copiar diagnóstico", "diagnostico", self.copiar_diagnostico),
-        )):
+        self.botao_testar = self.botao_com_icone(comandos, "Testar imagem", "imagem", self.testar)
+        self.botao_diagnostico = self.botao_com_icone(comandos, "Copiar diagnóstico", "diagnostico",
+                                                     self.copiar_diagnostico)
+        for coluna, botao in enumerate((self.botao, self.botao_testar, self.botao_diagnostico)):
             comandos.columnconfigure(coluna, weight=1, uniform="acoes")
             botao.grid(row=0, column=coluna, sticky="ew", padx=(0, 8 if coluna < 2 else 0))
         atalhos = ttk.Frame(painel)
@@ -728,9 +733,21 @@ class Painel:
             self._baixar_release()
 
     def copiar_diagnostico(self):
+        if self.botao_diagnostico.instate(["disabled"]):
+            return
+        self.botao_diagnostico.state(["disabled"])
+        Thread(target=self._ler_diagnostico, daemon=True).start()
+
+    def _ler_diagnostico(self):
         try:
             texto = self.diagnostico.texto() if self.diagnostico else ""
         except OSError:
+            texto = None
+        self.eventos.put(("diagnostico_copiado", texto))
+
+    def _mostrar_diagnostico_copiado(self, texto):
+        self.botao_diagnostico.state(["!disabled"])
+        if texto is None:
             self.atividade.set("Não foi possível ler o diagnóstico local.")
             return
         if not texto:
@@ -770,21 +787,32 @@ class Painel:
         else:
             self.atividade.set("Coloque o Fortnite em primeiro plano.")
         self.config = config
-        if self.fluxo is None:
-            self.fluxo = Fluxo(Detector(config=config))
-        else:
-            self.fluxo.config = self.fluxo.detector.config = config
-        if self.fluxo.rearmar_fila() and self.diagnostico:
-            self.diagnostico.registrar("espera_fila_rearmada_por_iniciar")
-        self.relogio.prazo_saida = self.fluxo.prazo_saida
+        self.relogio.prazo_saida = self.fluxo.prazo_saida if self.fluxo else None
+        self._proximo_relogio = 0.0
         self.relogio.iniciar(time.monotonic())
         self.status.set("Iniciando")
         self.botao.configure(text="Pausar")
         self.parar = Event()
-        self.worker = Thread(target=monitorar, args=(self.windows, self.fluxo, self.eventos, self.parar, self.diagnostico))
+        self.worker = Thread(target=self._executar_sessao, args=(self.parar,))
         self.worker.start()
-        Thread(target=monitorar_tesouros,
-               args=(self.windows, self.fluxo, self.eventos, self.parar, self.diagnostico), daemon=True).start()
+
+    def _executar_sessao(self, parar):
+        try:
+            reduzir_prioridade_thread()
+            if self.fluxo is None:
+                self.fluxo = Fluxo(Detector(config=self.config))
+            if parar.is_set():
+                return
+            self.fluxo.config = self.fluxo.detector.config = self.config
+            if self.fluxo.rearmar_fila() and self.diagnostico:
+                self.diagnostico.registrar("espera_fila_rearmada_por_iniciar")
+            contexto = self.windows, self.fluxo, self.eventos, parar, self.diagnostico
+            Thread(target=monitorar_tesouros, args=contexto, daemon=True).start()
+            monitorar(*contexto)
+        except (OSError, ValueError, cv2.error) as erro:
+            self.eventos.put(("erro", f"Não foi possível iniciar a automação. {erro}"))
+        finally:
+            parar.set()
 
     def atualizar_pausa(self):
         if self.worker is None:
@@ -807,21 +835,42 @@ class Painel:
                         self.atividade.set(FINALIZANDO_LEITURA)
 
     def testar(self):
+        if self.botao_testar.instate(["disabled"]):
+            return
         caminho = filedialog.askopenfilename(parent=self.janela, title="Selecionar uma captura",
                                              filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp")])
         if not caminho:
             return
         try:
-            quadro = detectar_arquivo(caminho)
-            detector = Detector(config=self.ler_opcoes())
-            alvo = detector.ler_contexto(quadro, "confirmar_sair")
-            if alvo is None and not detector.dialogo_ambiguo:
-                alvo = detector.detectar(quadro) or detector.procurar(
-                    quadro, ("lobby_jogar", "lobby_pronto", "voltar_lobby", "resgatar"),
-                )
-        except (OSError, ValueError, cv2.error):
-            self.atividade.set("Não foi possível testar a imagem. Confira o arquivo e os ajustes.")
+            config = self.ler_opcoes()
+        except ValueError:
+            self.atividade.set("Informe um tempo de partida entre 1 e 60 minutos.")
             return
+        self.botao_testar.state(["disabled"])
+        self.atividade.set("Analisando imagem…")
+        Thread(target=self._testar_imagem, args=(caminho, config), daemon=True).start()
+
+    def _testar_imagem(self, caminho, config):
+        try:
+            reduzir_prioridade_thread()
+            quadro, texto = self._analisar_imagem(caminho, config)
+            foto = Image.fromarray(cv2.cvtColor(quadro, cv2.COLOR_BGR2RGB))
+            foto.thumbnail((720, 405))
+            resultado = foto, texto
+        except Exception as erro:
+            resultado = None
+            if self.diagnostico:
+                self.diagnostico.registrar("erro_teste_imagem", tipo=type(erro).__name__)
+        self.eventos.put(("teste_imagem", resultado))
+
+    def _analisar_imagem(self, caminho, config):
+        quadro = detectar_arquivo(caminho)
+        detector = Detector(config=config)
+        alvo = detector.ler_contexto(quadro, "confirmar_sair")
+        if alvo is None and not detector.dialogo_ambiguo:
+            alvo = detector.detectar(quadro) or detector.procurar(
+                quadro, ("lobby_jogar", "lobby_pronto", "voltar_lobby", "resgatar"),
+            )
         if alvo:
             x, y, w, h = alvo.caixa
             cv2.rectangle(quadro, (x, y), (x + w, y + h), (85, 224, 183), max(2, quadro.shape[0] // 275))
@@ -838,17 +887,15 @@ class Painel:
             texto = "Aba Jogo reconhecida: Região de Pareamento."
         else:
             texto = "Nenhum botão reconhecido nesta imagem."
-        self.mostrar_teste(quadro, texto)
+        return quadro, texto
 
-    def mostrar_teste(self, quadro, texto):
+    def mostrar_teste(self, foto, texto):
         janela = tk.Toplevel(self.janela)
         janela.title("Teste de imagem")
         janela.transient(self.janela)
         painel = ttk.Frame(janela, padding=14)
         painel.pack(fill="both", expand=True)
         ttk.Label(painel, text=texto).pack(anchor="w", pady=(0, 10))
-        foto = Image.fromarray(cv2.cvtColor(quadro, cv2.COLOR_BGR2RGB))
-        foto.thumbnail((720, 405))
         imagem = ttk.Label(painel)
         imagem.foto = ImageTk.PhotoImage(foto)
         imagem.configure(image=imagem.foto)
@@ -863,7 +910,7 @@ class Painel:
             if f7 and not self.f7_anterior and self.worker is not None and self.worker.is_alive():
                 self.diagnostico.registrar("falha_marcada_pelo_usuario", estado=self.status.get())
             self.f7_anterior = f7
-        while True:
+        for _ in range(24):
             try:
                 evento, valor = self.eventos.get_nowait()
             except Empty:
@@ -875,6 +922,17 @@ class Painel:
                 self.total.set(str(valor))
             elif evento == "prazo_saida":
                 self.relogio.prazo_saida = valor
+                self._proximo_relogio = 0.0
+            elif evento == "teste_imagem":
+                self.botao_testar.state(["!disabled"])
+                if valor is None:
+                    self.atividade.set("Não foi possível testar a imagem. Confira o arquivo e os ajustes.")
+                else:
+                    if self.atividade.get() == "Analisando imagem…":
+                        self.atividade.set("Análise de imagem concluída.")
+                    self.mostrar_teste(*valor)
+            elif evento == "diagnostico_copiado":
+                self._mostrar_diagnostico_copiado(valor)
             elif evento == "resgate_webhook":
                 url, nome, quadro = valor
                 if url == self.config.webhook_url:
@@ -896,16 +954,22 @@ class Painel:
             elif evento == "erro" or (evento == "acao" and self.parar is not None and not self.parar.is_set()):
                 self.atividade.set(valor)
         self.atualizar_pausa()
-        saida, farmando = self.relogio.valores(time.monotonic())
+        agora = time.monotonic()
+        if agora >= self._proximo_relogio:
+            self._proximo_relogio = agora + 0.25
+            self.atualizar_relogio(agora)
+        if self.fechando and (self.worker is None or not self.worker.is_alive()):
+            self.janela.destroy()
+        else:
+            self.janela.after(45 if self.worker is not None else 65, self.atualizar)
+
+    def atualizar_relogio(self, agora):
+        saida, farmando = self.relogio.valores(agora)
         if saida != self.proxima_saida.get():
             self.proxima_saida.set(saida)
             self.rotulo_proxima_saida.configure(style="MetricaVazia.TLabel" if saida == "—" else "MetricaValor.TLabel")
         if farmando != self.farmando.get():
             self.farmando.set(farmando)
-        if self.fechando and (self.worker is None or not self.worker.is_alive()):
-            self.janela.destroy()
-        else:
-            self.janela.after(45, self.atualizar)
 
     def fechar(self):
         self.fechando = True

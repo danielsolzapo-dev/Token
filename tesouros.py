@@ -6,6 +6,8 @@ import time
 import cv2
 import numpy as np
 
+from windows_game import reduzir_prioridade_thread
+
 
 TESOUROS = {
     "acelerador": "Acelerador de Extração",
@@ -126,6 +128,7 @@ class AvisosTesouros:
 
 
 def monitorar_tesouros(windows, fluxo, eventos, parar, diagnostico=None):
+    reduzir_prioridade_thread()
     detector = None
     avisos = AvisosTesouros()
     while not parar.is_set():

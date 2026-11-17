@@ -664,12 +664,8 @@ class OcrRealTest(unittest.TestCase):
 
 class PainelTest(unittest.TestCase):
     def test_testar_imagem_exibe_metadados_sem_enviar_entrada(self):
-        chamadas = []
         painel = object.__new__(Painel)
-        painel.janela = None
         painel.windows = SimpleNamespace(executar=lambda *args: self.fail("não deve enviar entrada"))
-        painel.ler_opcoes = lambda: Config()
-        painel.mostrar_teste = lambda quadro, texto: chamadas.append((quadro.copy(), texto))
 
         class DetectorSimulado:
             dialogo_ambiguo = False
@@ -683,16 +679,28 @@ class PainelTest(unittest.TestCase):
             def detectar(self, quadro):
                 return Alvo("jogar", 0.91, (10, 10, 40, 20), 1.0)
 
-        with patch("app.filedialog.askopenfilename", return_value="captura.png"), \
-                patch("app.detectar_arquivo", return_value=np.zeros((80, 100, 3), dtype=np.uint8)), \
+        with patch("app.detectar_arquivo", return_value=np.zeros((80, 100, 3), dtype=np.uint8)), \
                 patch("app.Detector", DetectorSimulado):
-            painel.testar()
+            quadro, texto = painel._analisar_imagem("captura.png", Config())
 
-        quadro, texto = chamadas[0]
         self.assertIn("centro (30, 20)", texto)
         self.assertIn("template", texto)
         self.assertIn("score 91%", texto)
         self.assertTrue(np.array_equal(quadro[20, 30], (0, 0, 255)))
+
+    def test_botao_despacha_analise_para_uma_thread(self):
+        painel = object.__new__(Painel)
+        painel.janela = None
+        painel.botao_testar = Mock()
+        painel.botao_testar.instate.return_value = False
+        painel.atividade = Mock()
+        painel.ler_opcoes = lambda: Config()
+        painel._analisar_imagem = Mock()
+        with patch("app.filedialog.askopenfilename", return_value="captura.png"), patch("app.Thread") as thread:
+            painel.testar()
+        thread.assert_called_once_with(target=painel._testar_imagem, args=("captura.png", Config()), daemon=True)
+        thread.return_value.start.assert_called_once_with()
+        painel._analisar_imagem.assert_not_called()
 
 
 class MonitorTest(unittest.TestCase):
