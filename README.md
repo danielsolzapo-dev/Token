@@ -57,9 +57,11 @@ Inicie, teste e compile:
 ```powershell
 py -3.14 app.py
 py -3.14 -m unittest discover -s tests -v
-py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py relogio_painel.py texto_tela.py windows_game.py
+py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py painel_tema.py regiao.py relogio_painel.py texto_tela.py webhook.py windows_game.py
 py -3.14 app.py --verificar-build
-py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" app.py
+py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" --add-data "fontes;fontes" app.py
 ```
+
+A interface usa Inter 4.1. As fontes incluídas contêm o conjunto de caracteres do painel e a versão em negrito usa algarismos tabulares. A licença SIL OFL está em `fontes/LICENSE.txt`. [Projeto Inter](https://github.com/rsms/inter)
 
 O executável é gerado em `dist/`. O fluxo do GitHub Actions inclui os modelos OCR e as imagens de referência e executa verificações positivas e negativas no executável empacotado. Os testes usam detector, relógio e janela simulados e imagens sintéticas; não exigem Fortnite aberto, rede ou esperas reais. A confirmação final de foco, geometria e reconhecimento visual ainda precisa ser feita manualmente com Fortnite aberto.

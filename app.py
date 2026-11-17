@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from threading import Event, Thread
 import time
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog, font as tkfont, ttk
 import webbrowser
 
 import cv2
@@ -21,6 +21,7 @@ from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao
                          criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
 from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from painel_tema import ACENTO, AMBAR, BG, TemaPainel, carregar_inter, escurecer_titulo
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, NORTE, regiao_por_horario
 from relogio_painel import RelogioPainel
 from versao import VERSAO
@@ -28,15 +29,8 @@ from webhook import ErroWebhook, enviar_webhook, validar_url
 from windows_game import Windows
 
 
-BG = "#10141c"
-PAINEL = "#1b2230"
-TEXTO = "#f0f3f9"
-MUTED = "#aab7cb"
-ACENTO = "#afd45e"
 SOLTANDO_CONTROLES = "Soltando os controles da automação…"
 FINALIZANDO_LEITURA = "Controles liberados. Finalizando a leitura da tela…"
-FUNDO_METRICA = "#10141c"
-TEXTO_METRICA = "#ffe600"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
@@ -338,7 +332,7 @@ class Painel:
         self.fechando = False
         self.f7_anterior = False
         self.status = tk.StringVar(janela, "Pausado")
-        self.atividade = tk.StringVar(janela, "Clique em Iniciar no lobby ou já na partida.")
+        self.atividade = tk.StringVar(janela, "Use Iniciar ou F6 para retomar")
         self.total = tk.StringVar(janela, "0")
         self.proxima_saida = tk.StringVar(janela, "—")
         self.farmando = tk.StringVar(janela, "—")
@@ -346,108 +340,137 @@ class Painel:
         self.status_atualizacao = tk.StringVar(janela, f"Versão {VERSAO}")
         self.opcoes = {nome: tk.BooleanVar(janela, getattr(self.config, nome)) for nome in OPCOES}
         self.minutos = tk.StringVar(janela, f"{self.config.minutos_partida:g}".replace(".", ","))
-        self.status_webhook = tk.StringVar(janela, "Webhook configurado." if self.config.webhook_url else "")
+        self.status_webhook = tk.StringVar(janela, "Webhook configurado" if self.config.webhook_url else "Webhook desativado")
         self.janela_webhook = self.botao_teste_webhook = None
         self.janela_regiao = None
         self.teste_webhook_em_curso = False
 
-        janela.title(f"Auto Farm · {VERSAO}")
+        janela.title(f"Auto Farm {VERSAO}")
         janela.configure(bg=BG)
-        janela.minsize(590, 690)
-        janela.geometry("650x710")
+        janela.geometry("650x735")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
-        self.estilo()
+        familias = set(tkfont.families(janela))
+        familia = next((nome for nome in ("Inter Auto Farm", "Inter") if nome in familias), "Segoe UI")
+        self.tema = TemaPainel(janela, familia)
         self.montar()
+        janela.update_idletasks()
+        janela.minsize(590, self.conteudo.winfo_reqheight())
+        escurecer_titulo(janela)
+        janela.bind("<Map>", lambda evento: escurecer_titulo(janela) if evento.widget is janela else None, add="+")
+        self.status.trace_add("write", self.decorar_estado)
+        self.decorar_estado()
         janela.after(45, self.atualizar)
         janela.after(1000, self.verificar_automaticamente)
 
-    def estilo(self):
-        estilo = ttk.Style(self.janela)
-        estilo.theme_use("clam")
-        estilo.configure(".", font=("Segoe UI", 10), foreground=TEXTO, background=BG)
-        estilo.configure("Card.TFrame", background=PAINEL)
-        estilo.configure("Card.TLabel", background=PAINEL)
-        estilo.configure("Info.TLabel", foreground=MUTED)
-        estilo.configure("CardInfo.TLabel", foreground=MUTED, background=PAINEL)
-        estilo.configure("Titulo.TLabel", font=("Segoe UI", 25, "bold"))
-        estilo.configure("Metrica.TFrame", background=FUNDO_METRICA)
-        estilo.configure("MetricaTitulo.TLabel", background=FUNDO_METRICA, foreground=MUTED,
-                         font=("Segoe UI", 9, "bold"))
-        estilo.configure("MetricaValor.TLabel", background=FUNDO_METRICA, foreground=TEXTO_METRICA,
-                         font=("Segoe UI", 19, "bold"))
-        estilo.configure("MetricaVazia.TLabel", background=FUNDO_METRICA, foreground=MUTED,
-                         font=("Segoe UI", 19, "bold"))
-        estilo.configure("Status.TLabel", foreground=ACENTO, background=PAINEL,
-                         font=("Segoe UI", 12, "bold"))
-        estilo.configure("TCheckbutton", indicatorcolor=PAINEL)
-        estilo.map("TCheckbutton", indicatorcolor=[("selected", ACENTO)])
-        estilo.configure("TEntry", fieldbackground=PAINEL, insertcolor=TEXTO, padding=5)
-        estilo.configure("TButton", background=PAINEL, bordercolor="#3c4859", padding=(12, 8))
-        estilo.map("TButton", background=[("active", "#2d3a50")])
-        estilo.configure("Start.TButton", foreground="#16220b", background=ACENTO, bordercolor=ACENTO,
-                         font=("Segoe UI", 10, "bold"))
-        estilo.map("Start.TButton", background=[("active", "#cbe58f")])
+    def decorar_estado(self, *_):
+        pausado = self.status.get() in ("Pausado", "Pausando")
+        self.rotulo_estado.configure(style="Pausado.TLabel" if pausado else "Status.TLabel")
+        self.icone_estado.configure(image=self.tema.icone(
+            "pausa" if pausado else "play", AMBAR if pausado else ACENTO, 22))
+        self.botao.configure(image=self.tema.icone("play" if pausado else "pausa", BG))
+
+    def botao_com_icone(self, pai, nome, icone, comando, *, principal=False):
+        imagem = self.tema.icone(icone, BG) if principal else self.tema.icone(icone)
+        return ttk.Button(pai, text=f"  {nome}", image=imagem, compound="left", command=comando,
+                          style="Start.TButton" if principal else "TButton")
 
     def montar(self):
-        painel = ttk.Frame(self.janela, padding=(28, 20, 28, 14))
+        painel = self.conteudo = ttk.Frame(self.janela, padding=(24, 19, 24, 18))
         painel.pack(fill="both", expand=True)
-        ttk.Label(painel, text="Auto Farm", style="Titulo.TLabel").pack(anchor="w")
-        ttk.Label(painel, text="Fortnite · Fila, saída por tempo e movimento",
-                  style="Info.TLabel").pack(anchor="w", pady=(0, 13))
-        resumo = ttk.Frame(painel, style="Card.TFrame", padding=(16, 12))
-        resumo.pack(fill="x")
-        ttk.Label(resumo, textvariable=self.status, style="Status.TLabel", wraplength=485).pack(anchor="w")
-        ttk.Label(resumo, textvariable=self.atividade, style="CardInfo.TLabel", wraplength=485).pack(anchor="w")
-        metricas = ttk.Frame(resumo, style="Card.TFrame")
-        metricas.pack(fill="x", pady=(10, 0))
+        cabecalho = ttk.Frame(painel)
+        cabecalho.pack(fill="x", pady=(0, 12))
+        ttk.Label(cabecalho, image=self.tema.icone("bot", tamanho=28)).grid(row=0, column=0, padx=(0, 11))
+        ttk.Label(cabecalho, text="Auto Farm", style="Titulo.TLabel").grid(row=0, column=1, sticky="w")
+        versao = ttk.Frame(cabecalho, style="Metrica.TFrame", padding=1)
+        versao.grid(row=0, column=2, padx=(10, 0), sticky="w")
+        ttk.Label(versao, text=VERSAO, style="Versao.TLabel").pack()
+        ttk.Label(cabecalho, text="Fortnite · Fila, saída por tempo e movimento", style="Info.TLabel").grid(
+            row=1, column=1, columnspan=2, sticky="w", pady=(2, 0))
+
+        resumo = ttk.Frame(painel, style="Card.TFrame", padding=(14, 10))
+        resumo.pack(fill="x", pady=(0, 10))
+        estado = ttk.Frame(resumo, style="CardInterior.TFrame")
+        estado.pack(fill="x", pady=(0, 8))
+        self.icone_estado = ttk.Label(estado, style="Card.TLabel")
+        self.icone_estado.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 9), pady=(2, 0))
+        self.rotulo_estado = ttk.Label(estado, textvariable=self.status, wraplength=470)
+        self.rotulo_estado.grid(row=0, column=1, sticky="w")
+        ttk.Label(estado, textvariable=self.atividade, style="CardInfo.TLabel", wraplength=470).grid(
+            row=1, column=1, sticky="w", pady=(2, 0))
+        metricas = ttk.Frame(resumo, style="CardInterior.TFrame")
+        metricas.pack(fill="x")
         for coluna, (titulo, valor) in enumerate((
-            ("PARTIDAS", self.total), ("PRÓXIMA SAÍDA", self.proxima_saida), ("FARMANDO", self.farmando),
+            ("Partidas", self.total), ("Próxima saída", self.proxima_saida), ("Farmando", self.farmando),
         )):
             metricas.columnconfigure(coluna, weight=1, uniform="metricas")
-            cartao = ttk.Frame(metricas, padding=(12, 7), style="Metrica.TFrame")
-            cartao.grid(row=0, column=coluna, sticky="nsew", padx=(0, 6 if coluna < 2 else 0))
+            cartao = ttk.Frame(metricas, padding=(11, 6), style="Metrica.TFrame")
+            cartao.grid(row=0, column=coluna, sticky="nsew", padx=(0, 8 if coluna < 2 else 0))
             ttk.Label(cartao, text=titulo, style="MetricaTitulo.TLabel").pack(anchor="w")
             estilo_valor = "MetricaVazia.TLabel" if valor is self.proxima_saida else "MetricaValor.TLabel"
             rotulo = ttk.Label(cartao, textvariable=valor, style=estilo_valor)
             rotulo.pack(anchor="w")
             if valor is self.proxima_saida:
                 self.rotulo_proxima_saida = rotulo
-        for nome, texto in (
-            ("clicar_continuar", "Clicar em Continuar após a eliminação"),
-            ("fallback_cor", "Procurar Jogar Novamente pela cor"),
-            ("anti_afk", "Ativar movimento anti-AFK"),
-            ("rotina_aerea", "Saltar e fechar a asa-delta com Espaço"),
-            ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
+        automacao = ttk.Frame(painel, style="Card.TFrame", padding=(14, 10))
+        automacao.pack(fill="x", pady=(0, 10))
+        ttk.Label(automacao, text="  Automação", image=self.tema.icone("automacao", tamanho=19),
+                  compound="left", style="Secao.TLabel").pack(anchor="w", pady=(0, 5))
+        for nome, icone, texto in (
+            ("clicar_continuar", "alvo", "Clicar em Continuar após a eliminação"),
+            ("fallback_cor", "cor", "Procurar Jogar Novamente pela cor"),
+            ("anti_afk", "movimento", "Ativar movimento anti-AFK"),
+            ("rotina_aerea", "salto", "Saltar e fechar a asa-delta com Espaço"),
+            ("sair_por_tempo", "saida", "Voltar ao lobby após o tempo da partida"),
         ):
-            ttk.Checkbutton(painel, text=texto, variable=self.opcoes[nome]).pack(anchor="w", pady=(8, 0))
-        campo = ttk.Frame(painel)
-        campo.pack(anchor="w", pady=(10, 14))
-        ttk.Label(campo, text="Minutos por partida").pack(side="left", padx=(0, 10))
-        ttk.Entry(campo, textvariable=self.minutos, width=7).pack(side="left", padx=(0, 8))
-        ttk.Label(campo, text="1–60", style="Info.TLabel").pack(side="left")
+            ttk.Checkbutton(automacao, text=f"  {texto}", image=self.tema.icone(icone), compound="left",
+                            variable=self.opcoes[nome], style="Switch.TCheckbutton").pack(anchor="w", pady=2)
+        ttk.Frame(automacao, height=1, style="Separador.TFrame").pack(fill="x", pady=(5, 7))
+        campo = ttk.Frame(automacao, style="CardInterior.TFrame")
+        campo.pack(anchor="w")
+        ttk.Label(campo, text="Minutos por partida", style="Card.TLabel").pack(side="left", padx=(0, 14))
+        minutos = tuple(f"{passo / 2:g}".replace(".", ",") for passo in range(2, 121))
+        ttk.Spinbox(campo, textvariable=self.minutos, values=minutos, width=9).pack(side="left", padx=(0, 12))
+        ttk.Label(campo, text="1–60 min", style="CardInfo.TLabel").pack(side="left")
+
         comandos = ttk.Frame(painel)
         comandos.pack(fill="x")
-        self.botao = ttk.Button(comandos, text="Iniciar", style="Start.TButton", command=self.alternar)
-        self.botao.pack(side="left")
-        ttk.Button(comandos, text="Testar imagem", command=self.testar).pack(side="left", padx=8)
-        ttk.Button(comandos, text="Copiar diagnóstico", command=self.copiar_diagnostico).pack(side="left")
-        ttk.Label(comandos, text="F6 inicia ou pausa", style="Info.TLabel").pack(side="right")
-        ttk.Label(painel, text="F7 marca uma falha no diagnóstico durante a sessão.",
-                  style="Info.TLabel").pack(anchor="w", pady=(8, 0))
-        atualizacao = ttk.Frame(painel)
-        atualizacao.pack(fill="x", pady=(13, 0))
-        ttk.Checkbutton(atualizacao, text="Atualizar automaticamente", variable=self.opcoes["atualizar_auto"],
-                        command=self.salvar_preferencia_atualizacao).pack(side="left")
-        self.botao_atualizacao = ttk.Button(atualizacao, text="Verificar", command=self.acao_atualizacao)
+        self.botao = self.botao_com_icone(comandos, "Iniciar", "play", self.alternar, principal=True)
+        for coluna, botao in enumerate((
+            self.botao, self.botao_com_icone(comandos, "Testar imagem", "imagem", self.testar),
+            self.botao_com_icone(comandos, "Copiar diagnóstico", "diagnostico", self.copiar_diagnostico),
+        )):
+            comandos.columnconfigure(coluna, weight=1, uniform="acoes")
+            botao.grid(row=0, column=coluna, sticky="ew", padx=(0, 8 if coluna < 2 else 0))
+        atalhos = ttk.Frame(painel)
+        atalhos.pack(fill="x", pady=(5, 10))
+        ttk.Label(atalhos, text="F6 para iniciar ou pausar", style="Info.TLabel").pack(side="left", padx=4)
+        ttk.Label(atalhos, text="F7 para marcar uma falha no diagnóstico", style="Info.TLabel").pack(side="right", padx=4)
+
+        atualizacao = ttk.Frame(painel, style="Card.TFrame", padding=(14, 10))
+        atualizacao.pack(fill="x")
+        ttk.Label(atualizacao, text="  Atualizações", image=self.tema.icone("atualizar", tamanho=19),
+                  compound="left", style="Secao.TLabel").pack(anchor="w", pady=(0, 5))
+        opcoes_atualizacao = ttk.Frame(atualizacao, style="CardInterior.TFrame")
+        opcoes_atualizacao.pack(fill="x")
+        ttk.Checkbutton(opcoes_atualizacao, text="  Atualizar automaticamente", variable=self.opcoes["atualizar_auto"],
+                        command=self.salvar_preferencia_atualizacao, style="Switch.TCheckbutton",
+                        image=self.tema.icone("atualizar"), compound="left").pack(side="left")
+        self.botao_atualizacao = self.botao_com_icone(opcoes_atualizacao, "Verificar", "atualizar", self.acao_atualizacao)
         self.botao_atualizacao.pack(side="right")
-        ttk.Label(painel, textvariable=self.status_atualizacao, style="Info.TLabel",
-                  wraplength=515).pack(anchor="w", pady=(4, 0))
+        ttk.Label(atualizacao, textvariable=self.status_atualizacao, style="CardInfo.TLabel",
+                  wraplength=500).pack(anchor="w", pady=(4, 0))
+
         recompensas = ttk.Frame(painel)
         recompensas.pack(fill="x", pady=(10, 0))
-        ttk.Button(recompensas, text="Recompensas e webhook", command=self.mostrar_webhook).pack(side="left")
-        ttk.Button(recompensas, text="Regiões por horário", command=self.mostrar_regiao).pack(side="right")
-        ttk.Label(recompensas, textvariable=self.status_webhook, style="Info.TLabel",
-                  wraplength=200).pack(side="left", padx=10)
+        webhook = self.botao_com_icone(recompensas, "Recompensas e webhook", "presente", self.mostrar_webhook)
+        regioes = self.botao_com_icone(recompensas, "Regiões por horário", "relogio", self.mostrar_regiao)
+        aviso_webhook = ttk.Frame(recompensas, style="Card.TFrame", padding=(8, 4))
+        ttk.Label(aviso_webhook, textvariable=self.status_webhook, style="CardInfo.TLabel",
+                  image=self.tema.icone("link"), compound="left", wraplength=152,
+                  anchor="center").pack(expand=True, fill="x")
+        for coluna, item in enumerate((webhook, aviso_webhook, regioes)):
+            recompensas.columnconfigure(coluna, weight=1)
+            item.grid(row=0, column=coluna, sticky="nsew", padx=(0, 8 if coluna < 2 else 0))
 
     def mostrar_regiao(self):
         if self.janela_regiao and self.janela_regiao.winfo_exists():
@@ -1003,12 +1026,19 @@ def verificar_build():
     windows = Windows()
     janela = tk.Tk()
     janela.withdraw()
-    Painel(janela, windows, config=Config())
+    painel = Painel(janela, windows, config=Config())
     janela.update_idletasks()
+    if getattr(sys, "frozen", False):
+        fonte = tkfont.Font(janela, font=ttk.Style(janela).lookup("MetricaValor.TLabel", "font"))
+        if fonte.actual("family") != "Inter Auto Farm" or len({fonte.measure(n) for n in "0123456789"}) != 1:
+            raise RuntimeError("As fontes tabulares do painel não foram carregadas.")
+    if painel.botao.cget("state") == "disabled":
+        raise RuntimeError("O painel pausado deve permitir iniciar.")
     janela.destroy()
 
 
 def main():
+    carregar_inter()
     if sys.argv[1:] == ["--verificar-build"]:
         verificar_build()
         return
