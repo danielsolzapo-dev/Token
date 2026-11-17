@@ -23,7 +23,8 @@ TEMPLATES = {
     "lobby_jogar": ("lobby_jogar.png", (0, 0.6, 0.4, 1), 0.5),
     "lobby_pronto": ("lobby_pronto.png", (0, 0.6, 0.4, 1), 0.5),
     "resgatar": ("resgatar.png", (0.25, 0.7, 0.75, 1), 0.5),
-    "engrenagem_lobby": ("engrenagem_lobby.png", (0.64, 0, 0.93, 0.90), 1.0),
+    "engrenagem_lobby": ("engrenagem_lobby.png", (0.66, 0.54, 0.76, 0.88), 1.0),
+    "engrenagem_menu_lobby": ("engrenagem_menu_lobby.png", (0.77, 0.018, 0.84, 0.106), 1.0),
     "seta_regiao": ("seta_regiao.png", (0, 0, 1, 1), 1.0),
     "espectador": ("espectador.png", (0.3, 0, 0.7, 0.12), 1.0),
     "inventario": ("inventario.png", (0.65, 0.82, 1, 1), 1.0),
@@ -35,6 +36,7 @@ TEMPLATES = {
 BOTOES_LOBBY = ("lobby_jogar", "lobby_pronto")
 BOTOES_FILA = ("jogar", *BOTOES_LOBBY)
 AVISOS = ("onibus", "asa_delta", "reinicializando")
+ENGRENAGENS = ("engrenagem_lobby", "engrenagem_menu_lobby")
 TECLAS = {"W": 17, "A": 30, "D": 32}
 SEQUENCIA_AEREA = ("W", "WA", "W", "WD")
 ACOES_AEREAS = {
@@ -146,7 +148,7 @@ class Detector:
                 imagem = cv2.imdecode(np.frombuffer(caminho.read_bytes(), np.uint8), cv2.IMREAD_COLOR)
                 if imagem is not None:
                     imagem = _resize(imagem, fator)
-                    if nome == "engrenagem_lobby":
+                    if nome in ENGRENAGENS:
                         imagem = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
                     self.templates[nome] = _branco(imagem) if nome in AVISOS else imagem
 
@@ -199,16 +201,17 @@ class Detector:
             escala += 0.04
         return estimativa
 
-    def buscar_template(self, quadro, nome, limiar=None):
+    def buscar_template(self, quadro, nome, limiar=None, *, limites=None):
         if nome not in self.templates:
             return None
         limiar = self.config.limiar if limiar is None else limiar
-        _, limites, fator_trabalho = TEMPLATES[nome]
+        _, limites_padrao, fator_trabalho = TEMPLATES[nome]
+        limites = limites or limites_padrao
         imagem, fator = self.preparar(quadro, fator_trabalho)
         regiao, x0, y0 = _roi(imagem, limites)
         if nome in AVISOS:
             regiao = _branco(regiao)
-        elif nome == "engrenagem_lobby":
+        elif nome in ENGRENAGENS:
             regiao = cv2.cvtColor(regiao, cv2.COLOR_BGR2GRAY)
         escalas = self.escalas()
         ultima = self.ultima_escala.get(nome)
@@ -306,10 +309,18 @@ class Detector:
                 x, y, w, h = (round(v / 1.5) for v in linha.caixa)
                 detalhadas.append(replace(linha, caixa=(x + x0, y + y0, w, h)))
             tela = ler_tela_regiao([*linhas, *detalhadas], largura, altura)
-        if tela.social and not tela.engrenagem:
-            gear = self.buscar_template(quadro, "engrenagem_lobby", 0.83)
-            if gear and gear.score >= 0.83:
-                tela = replace(tela, engrenagem=gear.caixa)
+        if tela.social:
+            # A barra horizontal acompanha a borda direita. A engrenagem fica à
+            # esquerda do menu de três linhas, em uma faixa própria dessa barra.
+            limites = (max(0, 1 - 0.35 * altura / largura), 0.018,
+                       1 - 0.263 * altura / largura, 0.106)
+            engrenagem = self.buscar_template(quadro, "engrenagem_menu_lobby", 0.87, limites=limites)
+            if engrenagem and engrenagem.score >= 0.87:
+                tela = replace(tela, engrenagem=engrenagem.caixa)
+            elif not tela.engrenagem:
+                antiga = self.buscar_template(quadro, "engrenagem_lobby", 0.87)
+                if antiga and antiga.score >= 0.87:
+                    tela = replace(tela, engrenagem=antiga.caixa)
         return replace(tela, pareamento=self._setas_regiao(quadro, tela.pareamento),
                        subregiao=self._setas_regiao(quadro, tela.subregiao))
 

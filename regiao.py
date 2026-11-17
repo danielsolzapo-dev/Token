@@ -76,8 +76,16 @@ def ler_tela_regiao(linhas, largura, altura):
     restaurar = any("RESTAURAR PADRAO" in t or "RESTORE TO DEFAULT" in t for _, t in rodape)
     titulo = any(t in {"IDIOMA E REGIAO", "LANGUAGE AND REGION"} and l.centro[1] < 0.30 * altura
                  for l, t in rotulos)
-    social = any(l.centro[0] > 0.65 * largura and l.centro[1] < 0.35 * altura
-                 and t in {"SOCIAL", "EPIC ONLINE", "ONLINE NA EPIC", "AMIGOS EPIC"} for l, t in rotulos)
+    a_direita = [(l, t) for l, t in rotulos if l.centro[0] > 0.65 * largura]
+    menu_lobby = {"FECHAR O FORTNITE", "SAIR DO GRUPO", "ENTRAR NO MODO DE SUSPENSAO",
+                  "CONTROLE DOS PAIS", "GERENCIAR CONTEUDO DESBLOQUEADO", "SUPORTE E REEMBOLSO",
+                  "CLOSE FORTNITE", "LEAVE PARTY", "ENTER SLEEP MODE", "PARENTAL CONTROLS",
+                  "MANAGE UNLOCKED CONTENT", "SUPPORT AND REFUNDS"}
+    social = (any(l.centro[1] < 0.35 * altura and t in
+                  {"SOCIAL", "EPIC ONLINE", "ONLINE NA EPIC", "AMIGOS EPIC", "AMIGOS", "FRIENDS"}
+                  for l, t in a_direita)
+              or len({t for l, t in a_direita if 0.10 * altura < l.centro[1] < 0.72 * altura
+                      and t in menu_lobby}) >= 2)
     engrenagem = next((l.caixa for l, t in rotulos if l.centro[0] > 0.58 * largura
                        and t in {"CONFIGURACOES", "SETTINGS"}), None)
     tem_dialogo = any(any(p in t for p in ("CONFIGURACOES MODIFICADAS", "ALTERACOES NAO SALVAS",

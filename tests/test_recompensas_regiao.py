@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 import cv2
 import numpy as np
 
+from logica_autofarm import Detector
 from regiao import AMERICA_DO_NORTE, LinhaRegiao, RegiaoLobby, TelaRegiao, ler_tela_regiao, regiao_por_horario
 from texto_tela import Linha, identificar
 from webhook import ErroWebhook, enviar_webhook, validar_url
@@ -72,6 +73,28 @@ class WebhookTest(unittest.TestCase):
 
 
 class RegiaoTest(unittest.TestCase):
+    def test_menu_de_tres_linhas_reconhece_engrenagem_na_aba_vizinha(self):
+        linhas = [Linha("Fechar o Fortnite", (1098, 121, 149, 18)),
+                  Linha("Sair do Grupo", (1112, 175, 120, 20)),
+                  Linha("Controle dos Pais", (1100, 325, 143, 20))]
+        detector = Detector(leitor=SimpleNamespace(linhas=lambda _: linhas))
+        quadro = np.full((900, 1440, 3), 76, np.uint8)
+        icone = detector.templates["engrenagem_menu_lobby"]
+        icone = cv2.resize(icone, (30, 29))
+        quadro[39:68, 1155:1185] = icone[:, :, None]
+        quadro[39:68, 1205:1235] = icone[:, :, None]
+        tela = detector.tela_regiao(quadro)
+        self.assertTrue(tela.social)
+        self.assertIsNotNone(tela.engrenagem)
+        x, y, largura, altura = tela.engrenagem
+        self.assertAlmostEqual(x + largura / 2, 1170, delta=5)
+        self.assertAlmostEqual(y + altura / 2, 54, delta=5)
+        fluxo = RegiaoLobby()
+        fluxo.iniciar("Oceania", 0)
+        acao = fluxo.passo(tela, 2)
+        self.assertEqual((acao.tipo, acao.etapa, acao.caixa),
+                         ("clicar", "abrir_configuracoes", tela.engrenagem))
+
     def test_programacao_usa_fuso_de_brasilia_e_preferencias(self):
         for hora_utc, regiao in ((3, "NA-Oeste"), (8, "NA-Oeste"), (9, "Oceania"),
                                  (13, "Oceania"), (14, "Europa"), (20, "Europa"),
