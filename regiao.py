@@ -62,6 +62,8 @@ class TelaRegiao:
     aplicar: tuple | None = None
     voltar: tuple | None = None
     descartar: tuple | None = None
+    salvar: tuple | None = None
+    dialogo_alteracoes: bool = False
 
 
 def ler_tela_regiao(linhas, largura, altura):
@@ -78,11 +80,23 @@ def ler_tela_regiao(linhas, largura, altura):
                  and t in {"SOCIAL", "EPIC ONLINE", "ONLINE NA EPIC", "AMIGOS EPIC"} for l, t in rotulos)
     engrenagem = next((l.caixa for l, t in rotulos if l.centro[0] > 0.58 * largura
                        and t in {"CONFIGURACOES", "SETTINGS"}), None)
-    tem_dialogo = any(any(p in t for p in ("SALVAR ALTERACOES", "APLICAR ALTERACOES",
+    tem_dialogo = any(any(p in t for p in ("CONFIGURACOES MODIFICADAS", "ALTERACOES NAO SALVAS",
+                                           "SALVAR ALTERACOES", "APLICAR ALTERACOES", "SETTINGS CHANGED",
                                            "DISCARD CHANGES", "UNSAVED CHANGES"))
                       and 0.2 * altura < l.centro[1] < 0.65 * altura for l, t in rotulos)
-    descartar = next((l.caixa for l, t in rotulos if tem_dialogo and 0.35 * altura < l.centro[1] < 0.90 * altura
-                       and t in {"DESCARTAR", "DESCARTAR ALTERACOES", "NAO", "DISCARD", "NO"}), None)
+    if tem_dialogo:
+        botoes = [(l, t) for l, t in rotulos if 0.15 * largura < l.centro[0] < 0.85 * largura
+                  and 0.45 * altura < l.centro[1] < 0.90 * altura]
+        for salvar, texto in botoes:
+            if texto not in {"SALVAR", "SAVE", "SIM", "YES"}:
+                continue
+            descartar = next((l for l, t in botoes if t in {"NAO SALVAR", "DONT SAVE", "DO NOT SAVE",
+                              "DESCARTAR", "DESCARTAR ALTERACOES", "NAO", "DISCARD", "NO"}
+                              and salvar.centro[0] < l.centro[0]
+                              and abs(salvar.centro[1] - l.centro[1]) <= 0.055 * altura), None)
+            if descartar:
+                return TelaRegiao(descartar=descartar.caixa, salvar=salvar.caixa, dialogo_alteracoes=True)
+        return TelaRegiao(dialogo_alteracoes=True)
     configuracoes = titulo or bool(voltar and restaurar)
 
     def linha_regiao(predicado):
@@ -122,7 +136,7 @@ def ler_tela_regiao(linhas, largura, altura):
     subregiao = linha_regiao(rotulo_subregiao) if configuracoes else None
     aba_jogo = (round(largura * 0.38), round(altura * 0.023), round(largura * 0.04), round(altura * 0.04))
     return TelaRegiao(social, configuracoes, engrenagem, aba_jogo if configuracoes and not (titulo or pareamento) else None,
-                      pareamento, subregiao, aplicar, voltar, descartar)
+                      pareamento, subregiao, aplicar, voltar)
 
 
 @dataclass(frozen=True)
@@ -149,6 +163,7 @@ class RegiaoLobby:
         self._apontou = self._selecionou = False
         self._esc_social = 0
         self.ultima_tela = None
+        self._pareamento_lido = None
 
     def iniciar(self, alvo, agora):
         if alvo == self.confirmada or (alvo == self.falhou and agora < self.repetir_em):
@@ -166,6 +181,7 @@ class RegiaoLobby:
         self._apontou = self._selecionou = False
         self._esc_social = 1
         self.ultima_tela = None
+        self._pareamento_lido = None
         return OrdemRegiao("esc", "abrir_social")
 
     def pronto(self, agora):
@@ -194,7 +210,7 @@ class RegiaoLobby:
         principal, sub = tela.pareamento, tela.subregiao
         assinatura = (tela.social, tela.configuracoes, principal and (principal.valor, principal.focada),
                       sub and (sub.valor, sub.focada),
-                      bool(tela.aplicar), bool(tela.descartar), lobby)
+                      bool(tela.aplicar), tela.dialogo_alteracoes, lobby)
         if assinatura != self._assinatura:
             self._assinatura, self._ultima_mudanca = assinatura, agora
         if self.fechando is None and (agora >= self.prazo or agora - self._ultima_mudanca >= 14):
@@ -203,8 +219,9 @@ class RegiaoLobby:
         if self.fechando is not None:
             if agora >= self.prazo + 12:
                 return self._terminar(agora, False)
-            if tela.descartar:
-                return self._ordem(agora, "clicar", "descartar", tela.descartar)
+            if tela.dialogo_alteracoes:
+                caixa = tela.salvar if self.fechando else tela.descartar
+                return self._ordem(agora, "clicar", "salvar" if self.fechando else "descartar", caixa) if caixa else None
             if tela.configuracoes:
                 if tela.voltar:
                     return self._ordem(agora, "clicar", "fechar_configuracoes", tela.voltar)
@@ -215,26 +232,33 @@ class RegiaoLobby:
                 return self._terminar(agora, self.fechando)
             return None
 
-        if principal:
+        if principal and principal.valor is not None:
+            self._pareamento_lido = principal.valor
+        if principal or (tela.configuracoes and sub and self._pareamento_lido == AMERICA_DO_NORTE):
+            valor_principal = principal.valor if principal and principal.valor else self._pareamento_lido
             alvo_na = self.alvo in NORTE
-            concluido = (principal.valor == self.alvo or
-                          (alvo_na and principal.valor == AMERICA_DO_NORTE and sub and sub.valor == self.alvo))
+            concluido = (valor_principal == self.alvo or
+                         (alvo_na and valor_principal == AMERICA_DO_NORTE and sub and sub.valor == self.alvo))
             if concluido:
-                if self.alterou and tela.aplicar:
-                    self.ultima_submissao = agora
-                    return self._ordem(agora, "clicar", "aplicar", tela.aplicar)
                 if self.alterou and self.ultima_submissao is None:
-                    return None
+                    self.ultima_submissao = agora
+                    self.prazo = max(self.prazo, agora + 14)
+                    return self._ordem(agora, "tecla", "aplicar", tecla=0x1E)
+                if self.alterou and tela.aplicar:
+                    return self._ordem(agora, "clicar", "aplicar", tela.aplicar)
                 self.fechando = True
                 self.prazo = min(self.prazo, agora + 8)
                 if tela.voltar:
                     return self._ordem(agora, "clicar", "fechar_configuracoes", tela.voltar)
                 return self._ordem(agora, "esc", "fechar_configuracoes")
-            nome = "subregiao" if alvo_na and principal.valor == AMERICA_DO_NORTE else "pareamento"
+            nome = "subregiao" if alvo_na and valor_principal == AMERICA_DO_NORTE else "pareamento"
             linha = sub if nome == "subregiao" else principal
             if linha is None:
                 return None
-            return self._ajustar(agora, nome, linha)
+            ordem = self._ajustar(agora, nome, linha)
+            if ordem and nome == "pareamento" and ordem.etapa == nome and ordem.tipo in ("clicar", "tecla"):
+                self._pareamento_lido = None
+            return ordem
         if tela.aba_jogo:
             return self._ordem(agora, "clicar", "abrir_aba_jogo", tela.aba_jogo)
         if tela.social and tela.engrenagem:

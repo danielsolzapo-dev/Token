@@ -173,13 +173,13 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                         dados = (fluxo.regiao.alvo, tela.social, tela.configuracoes,
                                  principal.valor if principal else None, subregiao.valor if subregiao else None,
                                  bool(seletor and seletor.focada), bool(seletor and seletor.esquerda),
-                                 bool(seletor and seletor.direita), bool(tela.aplicar))
+                                 bool(seletor and seletor.direita), bool(tela.aplicar), tela.dialogo_alteracoes)
                         if dados != leitura_regiao_anterior:
                             leitura_regiao_anterior = dados
                             diagnostico.registrar("leitura_regiao", alvo=dados[0], social=dados[1],
                                                   configuracoes=dados[2], pareamento=dados[3], subregiao=dados[4],
                                                   foco_seletor=dados[5], seta_esquerda=dados[6],
-                                                  seta_direita=dados[7], aplicar=dados[8])
+                                                  seta_direita=dados[7], aplicar=dados[8], dialogo_alteracoes=dados[9])
                 leituras = (True, hud_visivel, partida, cursor, onibus, asa_delta, fluxo.motivo_anti_afk)
                 if diagnostico and (leituras != leituras_anteriores or agora >= proximo_registro):
                     diagnostico.registrar("leitura", foco=True, hud=hud_visivel, partida=partida,

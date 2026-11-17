@@ -143,11 +143,51 @@ class RegiaoTest(unittest.TestCase):
         self.assertEqual(fluxo.passo(TelaRegiao(pareamento=norte, subregiao=auto), 3).tipo, "apontar")
         auto = LinhaRegiao(caixa, "Automática", direita=caixa)
         self.assertEqual(fluxo.passo(TelaRegiao(pareamento=norte, subregiao=auto), 4).etapa, "subregiao")
-        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=norte, subregiao=oeste, aplicar=caixa), 5).etapa, "aplicar")
+        aplicar = fluxo.passo(TelaRegiao(pareamento=norte, subregiao=oeste, aplicar=caixa), 5)
+        self.assertEqual((aplicar.tipo, aplicar.etapa, aplicar.tecla), ("tecla", "aplicar", 0x1E))
         self.assertEqual(fluxo.passo(TelaRegiao(configuracoes=True, pareamento=norte, subregiao=oeste), 6).tipo, "esc")
         self.assertEqual(fluxo.passo(TelaRegiao(social=True), 7).tipo, "esc")
         self.assertEqual(fluxo.passo(TelaRegiao(), 8, lobby=True).tipo, "ok")
         self.assertIsNone(fluxo.iniciar("NA-Oeste", 9))
+
+    def test_na_oeste_mantem_subregiao_quando_pareamento_fica_ilegivel(self):
+        fluxo = RegiaoLobby()
+        fluxo.iniciar("NA-Oeste", 0)
+        caixa = (501, 188, 190, 25)
+        norte = LinhaRegiao(caixa, AMERICA_DO_NORTE, direita=caixa)
+        automatico = LinhaRegiao(caixa, "Automática")
+        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=norte, subregiao=automatico), 1).etapa, "subregiao")
+        ilegivel = LinhaRegiao(caixa, None, direita=caixa)
+        automatico_focado = LinhaRegiao(caixa, "Automática", direita=caixa, focada=True)
+        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=ilegivel, subregiao=automatico_focado), 2).etapa,
+                         "subregiao")
+        oeste = LinhaRegiao(caixa, "NA-Oeste", focada=True)
+        tecla = fluxo.passo(TelaRegiao(pareamento=ilegivel, subregiao=oeste), 3)
+        self.assertEqual(tecla.tecla, 0x1E)
+
+    def test_dialogo_salva_apenas_quando_regiao_desejada_foi_confirmada(self):
+        linhas = [Linha("CONFIGURAÇÕES MODIFICADAS", (204, 216, 461, 40)),
+                  Linha("Você tem alterações não salvas. Gostaria de salvá-las antes de sair?", (206, 296, 601, 22)),
+                  Linha("SALVAR", (323, 599, 84, 23)), Linha("NÃO SALVAR", (655, 598, 136, 24))]
+        tela = ler_tela_regiao(linhas, 1160, 827)
+        self.assertTrue(tela.dialogo_alteracoes)
+        self.assertEqual(tela.salvar, linhas[2].caixa)
+        self.assertEqual(tela.descartar, linhas[3].caixa)
+        for selecionou, acao, caixa in ((True, "salvar", tela.salvar), (False, "descartar", tela.descartar)):
+            with self.subTest(selecionou=selecionou):
+                fluxo = RegiaoLobby()
+                fluxo.iniciar("Europa", 0)
+                if selecionou:
+                    automatico = LinhaRegiao((500, 188, 190, 25), "Automática", direita=(728, 191, 14, 19))
+                    fluxo.passo(TelaRegiao(pareamento=automatico), 1)
+                    europa = LinhaRegiao(automatico.caixa, "Europa")
+                    self.assertEqual(fluxo.passo(TelaRegiao(pareamento=europa), 2).tecla, 0x1E)
+                    self.assertEqual(fluxo.passo(TelaRegiao(pareamento=europa), 3).etapa, "fechar_configuracoes")
+                else:
+                    fluxo.cancelar(3)
+                ordem = fluxo.passo(tela, 4)
+                self.assertEqual((ordem.tipo, ordem.etapa, ordem.caixa), ("clicar", acao, caixa))
+        self.assertIsNone(ler_tela_regiao(linhas[:-1], 1160, 827).salvar)
 
     def test_falha_segue_lobby_e_agenda_nova_tentativa(self):
         fluxo = RegiaoLobby()
