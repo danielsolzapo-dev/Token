@@ -38,6 +38,7 @@ ACOES_AEREAS = {
     "fechar_asa": (("teclas", (57,), 0.16),),
 }
 DURACAO_CAMINHADA = 1.45
+TOLERANCIA_HUD = 5.0
 
 
 @dataclass(frozen=True)
@@ -457,6 +458,7 @@ class Fluxo:
         self._proxima_acao = 0.0
         self._prazo_lobby = None
         self._prazo_menu = None
+        self._repetir_saida_em = 0.0
         self._prazo_fila = None
         self._fila_contada = False
         self._fila_expirada = False
@@ -481,6 +483,7 @@ class Fluxo:
         self._desvio = (0.0, 0.0, 0.0)
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
+        self._ultimo_hud_em_partida = None
         self._proxima_caminhada = 0.0
         self._proximo_clique_movimento = 0.0
         self._voltas_caminhada = 0
@@ -499,10 +502,13 @@ class Fluxo:
         self._sem_leitura_desde = None
         self._aviso_leitura = False
         self._quadros_hud_afk = 0
+        self._ultimo_hud_em_partida = None
         self.embarque.pausar()
 
     def _iniciar_partida(self, agora):
         self.inicio_partida = agora
+        self._ultimo_hud_em_partida = agora
+        self._repetir_saida_em = 0.0
         self._desvio = (0.0, 0.0, 0.0)
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
@@ -562,6 +568,8 @@ class Fluxo:
         self._pendente = acao.alvo.nome
         self._tentativas += 1
         self._quadros_sem_alvo = 0
+        if self._pendente == "menu_aba" and self._prazo_menu is not None:
+            self._prazo_menu = agora + 10
         if self._pendente in BOTOES_FILA:
             self._fila_bloqueada = True
             self._movimento_exige_transicao = True
@@ -589,7 +597,9 @@ class Fluxo:
     def _verificar_clique(self, quadro, agora, hud_visivel, no_onibus, partida=False):
         nome = self._pendente
         abriu_modal = nome == "voltar_lobby" and self.detector.ler_contexto(quadro, "confirmar_sair")
-        alvo = None if abriu_modal or (partida and nome in BOTOES_LOBBY) else self._alvo(quadro, nome)
+        mudou_de_aba = nome == "menu_aba" and self._procurar(quadro, "voltar_lobby")
+        alvo_sumiu = abriu_modal or mudou_de_aba or (partida and nome in BOTOES_LOBBY)
+        alvo = None if alvo_sumiu else self._alvo(quadro, nome)
         if nome in ("voltar_lobby", "confirmar_sair") and self.detector.dialogo_ambiguo:
             self._quadros_sem_alvo = 0
             return None
@@ -617,7 +627,6 @@ class Fluxo:
             self._proximo_texto_fila = agora
             return Acao("aguardando_fila")
         elif nome == "voltar_lobby":
-            self.inicio_partida = None
             self._prazo_menu = None
             self._prazo_lobby = agora + self.config.timeout_lobby
         return Acao("clique_confirmado")
@@ -630,11 +639,8 @@ class Fluxo:
 
     def _confirmar_fila(self, quadro, agora, partida, hud_visivel, no_onibus):
         if agora >= self._prazo_fila and not self._fila_expirada:
-            if not self._fila_contada:
-                self._encerrar_espera_fila()
-                return Acao("partida_nao_confirmada")
             self._fila_expirada = True
-            return Acao("fila_sem_partida")
+            return Acao("fila_sem_partida" if self._fila_contada else "partida_nao_confirmada")
         self._observar_transicao(hud_visivel, no_onibus, agora)
         jogo_novo = partida and self._transicao_hud
         self._quadros_partida = self._quadros_partida + 1 if jogo_novo else 0
@@ -651,7 +657,7 @@ class Fluxo:
             self._fila_bloqueada = False
             self._encerrar_espera_fila()
             return Acao("partida_confirmada")
-        if self._fila_contada:
+        if self._fila_contada or self._fila_expirada:
             if not jogo_novo and agora >= self._proximo_texto_fila:
                 self._proximo_texto_fila = agora + 1
                 cancelada = self.detector.ler_contexto(quadro, "fila_cancelada")
@@ -697,17 +703,23 @@ class Fluxo:
             self.motivo_anti_afk = "fortnite_sem_foco"
             self.pausar()
             return None
+        hud_visivel = partida if hud_visivel is None else hud_visivel
+        if cursor or no_onibus or asa_delta or espectando:
+            self._ultimo_hud_em_partida = None
+        elif partida and self.inicio_partida is not None:
+            self._ultimo_hud_em_partida = agora
+        hud_recente = (not partida and self._ultimo_hud_em_partida is not None
+                       and agora - self._ultimo_hud_em_partida <= TOLERANCIA_HUD)
         if agora < self._proxima_acao:
             self.motivo_anti_afk = "intervalo_entre_acoes"
             return None
-        if not partida or no_onibus:
+        if not (partida or hud_recente) or no_onibus:
             self._quadros_hud_afk = 0
             if self._prazo_fila is None:
                 self._inicio_hud_novo = None
-        hud_visivel = partida if hud_visivel is None else hud_visivel
         onibus_novo = no_onibus and (not self._onibus_visivel_no_clique or self._transicao_hud)
-        descendo = (self.embarque.saltou_em is not None and not no_onibus
-                    and self.embarque.em_transicao(agora))
+        saiu_do_onibus = self.embarque.saltou_em is not None and not no_onibus
+        descendo = saiu_do_onibus and self.embarque.em_transicao(agora)
         controle_aereo = (descendo and self.config.rotina_aerea
                           and self.config.anti_afk and not cursor and not espectando
                           and self._prazo_menu is None and self._prazo_lobby is None)
@@ -726,8 +738,8 @@ class Fluxo:
         if (onibus_novo or asa_delta) and not replay_na_tela and self._pendente is None and self._prazo_fila is None:
             self.motivo_anti_afk = "aviso_de_onibus" if onibus_novo else "asa_delta"
             return self._mover_no_ar(quadro, agora, controle_aereo)
-        if descendo and partida and not espectando and (self._pendente in BOTOES_FILA
-                                                         or self._prazo_fila is not None):
+        if saiu_do_onibus and partida and not espectando and (self._pendente in BOTOES_FILA
+                                                              or self._prazo_fila is not None):
             self._transicao_hud = True
         if self._pendente:
             self.motivo_anti_afk = "verificando_clique"
@@ -747,13 +759,16 @@ class Fluxo:
         self._botoes_fila_clicados.clear()
         if self._prazo_menu is not None:
             self.motivo_anti_afk = "aguardando_menu_de_saida"
-            if agora >= self._prazo_menu:
-                self._prazo_menu = None
-                self._proxima_acao = agora + 30
-                return Acao("menu_nao_encontrado")
             alvo = self._procurar(quadro, "voltar_lobby") or self._procurar(quadro, "menu_aba")
             if alvo:
-                return self._clicar_e_verificar(alvo, quadro)
+                if acao := self._clicar_e_verificar(alvo, quadro):
+                    return acao
+                if alvo.nome != self._bloqueado and agora < self._prazo_menu + 5:
+                    return None
+            if agora >= self._prazo_menu:
+                self._prazo_menu = None
+                self._repetir_saida_em = agora + 5
+                return Acao("menu_nao_encontrado")
             self.confirmacao.limpar()
             return None
 
@@ -766,6 +781,8 @@ class Fluxo:
                 return self._clicar_e_verificar(alvo, quadro)
         alvo = self.detector.detectar(quadro)
         if alvo:
+            if alvo.nome == "jogar":
+                self._ultimo_hud_em_partida = None
             self._sem_leitura_desde = None
             self._aviso_leitura = False
             return self._clicar_e_verificar(alvo, quadro)
@@ -790,7 +807,7 @@ class Fluxo:
             self.confirmacao.limpar()
             return None
         self.confirmacao.limpar()
-        inventario_aberto = bool(partida and self._procurar(quadro, "inventario"))
+        inventario_aberto = bool((partida or hud_recente) and self._procurar(quadro, "inventario"))
         if inventario_aberto:
             self._quadros_hud_afk = 0
             self._inicio_hud_novo = None
@@ -798,9 +815,12 @@ class Fluxo:
             self._sem_leitura_desde = None
             self._aviso_leitura = False
             prazo_saida = self.prazo_saida
-            if (prazo_saida is not None and agora >= prazo_saida
+            if (prazo_saida is not None and agora >= max(prazo_saida, self._repetir_saida_em)
                     and not inventario_aberto and not no_onibus and not asa_delta):
                 self._prazo_menu = agora + 10
+                alvo = (self._procurar(quadro, "voltar_lobby") or self._procurar(quadro, "menu_aba")) if cursor else None
+                if alvo:
+                    return self._clicar_e_verificar(alvo, quadro)
                 self._proxima_acao = agora + 1
                 return Acao("esc")
         elif self._sem_leitura_desde is None:
@@ -813,7 +833,7 @@ class Fluxo:
             return None
         if controle_aereo:
             return self._mover_no_ar(quadro, agora, controle_aereo)
-        if not partida or no_onibus or asa_delta or espectando:
+        if not (partida or hud_recente) or no_onibus or asa_delta or espectando:
             self.motivo_anti_afk = ("espectando" if espectando else "aviso_de_onibus" if no_onibus
                                    else "asa_delta" if asa_delta else "hud_indisponivel")
             return None

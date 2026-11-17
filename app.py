@@ -86,7 +86,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     try:
         if diagnostico:
             diagnostico.registrar("sessao_iniciada", versao=VERSAO, anti_afk=fluxo.config.anti_afk,
-                                  saida_por_tempo=fluxo.config.sair_por_tempo)
+                                  saida_por_tempo=fluxo.config.sair_por_tempo,
+                                  minutos_partida=fluxo.config.minutos_partida)
         detector = fluxo.detector
         if faltando := TEMPLATES.keys() - detector.templates.keys():
             raise ValueError("Imagens de referência ausentes: " + ", ".join(sorted(faltando)))
@@ -178,6 +179,9 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 prazo_saida = fluxo.prazo_saida
                 if prazo_saida != prazo_anterior:
                     eventos.put(("prazo_saida", prazo_saida))
+                    if diagnostico:
+                        segundos = None if prazo_saida is None else round(max(0, prazo_saida - time.monotonic()), 1)
+                        diagnostico.registrar("cronometro_saida", segundos_restantes=segundos)
                     prazo_anterior = prazo_saida
                 if executada:
                     if acao.tipo == "clicar":
@@ -200,14 +204,14 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                             "movimento_menu": "Anti-AFK aguardando fechar o menu de saída.",
                             "clique_confirmado": "Botão saiu da tela",
                             "clique_ignorado": "Botão continua visível após três tentativas",
-                            "menu_nao_encontrado": "Menu de saída não encontrado",
+                            "menu_nao_encontrado": "Menu de saída não encontrado. Tentando de novo em instantes.",
                             "lobby_nao_encontrado": "Lobby não encontrado. Confira se o jogo pede confirmação.",
                             "aguardando_fila": "Aguardando confirmação da fila ou do início da partida",
                             "fila_confirmada": "Fila confirmada. Aguardando o início da partida.",
                             "fila_sem_partida": "Fila confirmada sem início de partida. Aguardando o jogo ou o cancelamento.",
                             "fila_cancelada": "Cancelamento de fila reconhecido.",
                             "partida_confirmada": "Partida reconhecida. Cronômetro iniciado.",
-                            "partida_nao_confirmada": "Nenhuma partida reconhecida dentro do prazo",
+                            "partida_nao_confirmada": "Fila demorando. Continuo aguardando a partida.",
                             "tela_nao_reconhecida": "Tela sem sinais conhecidos. Verifique o jogo ou use Testar imagem.",
                         }[acao.tipo]
                     if texto and texto != acao_anterior:
