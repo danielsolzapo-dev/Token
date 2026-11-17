@@ -421,7 +421,7 @@ class Windows:
             return ponto.x, ponto.y
         return None
 
-    def _clicar_fundo_com_cursor(self, janela, parar, x, y):
+    def _clicar_fundo_com_cursor(self, janela, parar, x, y, tentativa):
         if not self._cursor_parado():
             self._motivo_cursor_fundo = "mouse_ou_teclado_em_uso"
             return False
@@ -435,16 +435,20 @@ class Windows:
             return False
         destino = x, y
         dados = self._coordenadas_mouse(x - janela.area[0], y - janela.area[1])
+        # Após uma tentativa sem confirmação, dê mais de um quadro ao menu.
+        passo = min(tentativa, 2)
+        tempo_ponteiro = 0.04 + 0.065 * passo
+        tempo_pressionado = 0.035 + 0.04 * passo
         try:
             if self._posicao_cursor() != destino:
                 return False
             if not self._enviar_mouse_para_janela(janela, 0x200, 0, dados):
                 return False
-            if not self._esperar(janela, parar, 0.04) or self._posicao_cursor() != destino:
+            if not self._esperar(janela, parar, tempo_ponteiro) or self._posicao_cursor() != destino:
                 return False
             try:
                 enviado = self._enviar_mouse_para_janela(janela, 0x201, 1, dados)
-                mantido = enviado and self._esperar(janela, parar, 0.035)
+                mantido = enviado and self._esperar(janela, parar, tempo_pressionado)
             finally:
                 liberado = self._enviar_mouse_para_janela(janela, 0x202, 0, dados)
             return bool(mantido and liberado)
@@ -560,7 +564,7 @@ class Windows:
                 return False
             if janela.pid_fundo:
                 if janela.cursor_fundo and acao.tipo == "clicar":
-                    return self._clicar_fundo_com_cursor(janela, parar, x, y)
+                    return self._clicar_fundo_com_cursor(janela, parar, x, y, acao.tentativa)
                 if not self._apontar_fundo(janela, x - esquerda, y - topo):
                     return False
                 if acao.tipo == "apontar":

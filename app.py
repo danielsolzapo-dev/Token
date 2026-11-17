@@ -21,7 +21,7 @@ from PIL import Image, ImageGrab, ImageTk
 from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao,
                          criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
-from logica_autofarm import ACOES_AEREAS, BOTOES_LOBBY, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from logica_autofarm import ACOES_AEREAS, BOTOES_FILA, Config, Detector, Fluxo, TECLAS, TEMPLATES
 from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, NORTE, regiao_por_horario
 from relogio_painel import RelogioPainel
@@ -107,7 +107,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     proximo_esquadrao = 0.0
     candidato_esquadrao = contagem_esquadrao = None
     quadros_esquadrao = 0
-    aguardando_foco = False
+    aguardando_foco = None
     etapa = "iniciar"
     acao = None
     try:
@@ -135,10 +135,11 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
             pronto = quadro is not None and windows.disponivel(janela, parar)
             if pronto:
                 if aguardando_foco:
-                    fluxo.rearmar_fila()
-                    aguardando_foco = False
+                    alvo = aguardando_foco.alvo.nome if aguardando_foco.alvo else None
+                    fluxo.rearmar_apos_foco(alvo, time.monotonic())
+                    aguardando_foco = None
                     if diagnostico:
-                        diagnostico.registrar("controle_retomado_em_primeiro_plano")
+                        diagnostico.registrar("controle_retomado_em_primeiro_plano", alvo=alvo)
                 etapa = "detectar"
                 hud_visivel = partida = detector.em_partida(quadro)
                 bloqueio_hud = detector.procurar(quadro, ("espectador", "reinicializando"), 0.8)
@@ -231,21 +232,23 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     estado = f"Em partida · {contagem_esquadrao} no HUD do esquadrão"
                 if em_fundo:
                     estado += " · Segundo plano"
-                falha_lobby = acao and (
+                falha_menu = acao and (
                     acao.tipo == "painel_social_nao_fechou"
-                    or (acao.tipo == "clique_ignorado" and acao.alvo.nome in BOTOES_LOBBY)
+                    or (acao.tipo == "clique_ignorado"
+                        and (acao.alvo.nome in BOTOES_FILA
+                             or acao.alvo.nome in ("menu_aba", "voltar_lobby", "confirmar_sair")))
                 )
-                if em_fundo and falha_lobby:
-                    aguardando_foco = True
+                if em_fundo and falha_menu:
+                    aguardando_foco = acao
                     estado = "Fortnite sem resposta · volte ao jogo"
                     if diagnostico:
-                        diagnostico.registrar("controle_aguardando_primeiro_plano", motivo=acao.tipo)
+                        diagnostico.registrar("controle_aguardando_primeiro_plano", motivo=acao.tipo,
+                                              alvo=acao.alvo.nome if acao.alvo else None)
                 tem_entrada = acao is not None and (bool(acao.passos) or acao.tipo in ("clicar", "esc", "apontar"))
                 if diagnostico and acao and (tem_entrada or acao.tipo != ultimo_tipo):
                     ordem += 1
                     posicao = ({"centro": tuple(round(v) for v in acao.alvo.centro)}
-                               if acao.tipo in ("clicar", "apontar") and acao.alvo.nome.startswith("regiao_")
-                               else {})
+                               if acao.tipo in ("clicar", "apontar") else {})
                     diagnostico.registrar("acao", id=ordem, tipo=acao.tipo,
                                           alvo=acao.alvo.nome if acao.alvo else None,
                                           tentativa=acao.tentativa + 1 if acao.tipo == "clicar" else None,

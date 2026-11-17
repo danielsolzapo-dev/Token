@@ -677,6 +677,18 @@ class Fluxo:
             self._bloqueado = None
         return recuperando
 
+    def rearmar_apos_foco(self, alvo, agora):
+        if alvo is None or alvo in BOTOES_FILA:
+            self.rearmar_fila()
+            return
+        if self._bloqueado == alvo:
+            self._bloqueado = None
+        self.pausar()
+        if alvo == "confirmar_sair":
+            self._prazo_lobby = agora + self.config.timeout_lobby
+        else:
+            self._prazo_menu = agora + 10
+
     def _procurar(self, quadro, *nomes):
         return self.detector.procurar(quadro, nomes)
 

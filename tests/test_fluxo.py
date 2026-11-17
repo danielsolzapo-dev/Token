@@ -325,6 +325,20 @@ class FluxoTest(unittest.TestCase):
         self.assertIsNone(self.passo(7, partida=True))
         self.assertIsNone(self.passo(7.3, cursor=True))
 
+    def test_saida_retoma_no_menu_visivel_ao_recuperar_foco_depois_de_falha(self):
+        self.fluxo._iniciar_partida(0)
+        self.assertEqual(self.passo(6, partida=True).tipo, "esc")
+        self.assertIsNone(self.passo(7.1, "menu_aba", cursor=True))
+        for instante, tentativa in ((7.4, 0), (9, 1), (11, 2)):
+            acao = self.passo(instante, "menu_aba", cursor=True)
+            self.assertEqual((acao.alvo.nome, acao.tentativa), ("menu_aba", tentativa))
+        self.assertEqual(self.passo(13, "menu_aba", cursor=True).tipo, "clique_ignorado")
+        self.fluxo.rearmar_apos_foco("menu_aba", 80)
+        self.assertIsNone(self.passo(80, "menu_aba", cursor=True))
+        acao = self.passo(80.3, "menu_aba", cursor=True)
+        self.assertEqual((acao.alvo.nome, acao.tentativa), ("menu_aba", 0))
+        self.assertEqual(self.fluxo.prazo_saida, 6)
+
     def test_nova_fila_exige_cancelamento_explicito_apos_timeout(self):
         self.confirmar_fila_e_expirar()
         self.assertIsNone(self.passo(12.2, "fila_cancelada"))
