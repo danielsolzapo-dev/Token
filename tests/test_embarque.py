@@ -42,6 +42,13 @@ class LeituraDiagnosticoTest(unittest.TestCase):
         regiao = Linha("Região de Pareament", (400, 194, 212, 16))
         self.assertEqual(identificar([regiao], 1440, 860, "tela_regiao"), regiao)
 
+    def test_pronto_de_lobby_rejeita_indicacao_de_esc(self):
+        pronto = Linha("PRONTO", (30, 5, 65, 20))
+        esc = Linha("ESC", (5, 6, 20, 18))
+        self.assertEqual(identificar([pronto], 140, 35, "pronto_lobby"), pronto)
+        self.assertIsNone(identificar([esc, pronto], 140, 35, "pronto_lobby"))
+        self.assertIsNone(identificar([Linha("NÃO PRONTO", (28, 3, 90, 20))], 140, 35, "pronto_lobby"))
+
     def test_barras_do_esquadrao_exigem_pares_acima_do_hud_proprio(self):
         quadro = np.zeros((860, 1440, 3), dtype=np.uint8)
         for y in (680, 720):

@@ -90,6 +90,26 @@ def _roi(imagem, limites):
     return imagem[y0:int(y1 * altura), x0:int(x1 * largura)], x0, y0
 
 
+def _cruz_da_vida(branco, x, y, altura):
+    margem = max(22, round(altura * 0.9))
+    esquerda, topo = max(0, x - margem), max(0, y - 3)
+    area = branco[topo:y + altura + 3, esquerda:x]
+    if not area.size:
+        return False
+    contornos, _ = cv2.findContours(area, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for contorno in contornos:
+        xx, yy, w, h = cv2.boundingRect(contorno)
+        if not (6 <= w <= 24 and 6 <= h <= 24 and 0.7 <= w / h <= 1.3
+                and abs(topo + yy + h / 2 - (y + altura / 2)) <= max(7, 0.35 * altura)):
+            continue
+        forma = cv2.resize(area[yy:yy + h, xx:xx + w], (9, 9), interpolation=cv2.INTER_AREA) >= 128
+        bracos = (forma[3:6, :3], forma[3:6, 6:], forma[:3, 3:6], forma[6:, 3:6])
+        cantos = (forma[:3, :3], forma[:3, 6:], forma[6:, :3], forma[6:, 6:])
+        if all(b.mean() >= 0.55 for b in bracos) and all(c.mean() <= 0.45 for c in cantos):
+            return True
+    return False
+
+
 class Detector:
     def __init__(self, pasta=None, config=Config(), leitor=None):
         self.config = config
@@ -205,11 +225,26 @@ class Detector:
     def procurar(self, quadro, nomes, limiar=None):
         limiar = self.config.limiar if limiar is None else limiar
         candidatos = (self.buscar_template(quadro, nome, limiar) for nome in nomes)
-        validos = (alvo for alvo in candidatos if alvo and alvo.score >= limiar)
+        validos = (alvo for alvo in candidatos if alvo and alvo.score >= limiar
+                   and (alvo.nome != "lobby_pronto" or self._confirmar_pronto(quadro, alvo)))
         melhor = max(validos, key=lambda alvo: alvo.score, default=None)
         if melhor is None and "lobby_jogar" in nomes:
             return self._ler_jogar_painel(quadro)
         return melhor
+
+    def _confirmar_pronto(self, quadro, alvo):
+        x, y, w, h = alvo.caixa
+        recorte = quadro[y:y + h, x:x + w]
+        if recorte.size == 0:
+            return False
+        hsv = cv2.cvtColor(recorte, cv2.COLOR_BGR2HSV)
+        amarelo = cv2.inRange(hsv, (20, 140, 145), (38, 255, 255))
+        if cv2.countNonZero(amarelo) < 0.64 * amarelo.size:
+            return False
+        ampliado = _resize(recorte, max(1, 90 / recorte.shape[0]))
+        margem = cv2.copyMakeBorder(ampliado, 20, 20, 20, 20, cv2.BORDER_CONSTANT,
+                                    value=(255, 255, 255))
+        return bool(self.ler_contexto(margem, "pronto_lobby"))
 
     def _ler_jogar_painel(self, quadro):
         regiao, x0, y0 = _roi(quadro, (0.55, 0.8, 0.98, 0.98))
@@ -259,11 +294,12 @@ class Detector:
         return self.procurar(quadro, (*BOTOES_LOBBY, "menu_aba", "menu_aba_sel")) is not None
 
     def em_partida(self, quadro):
-        """Busca a barra de vida no HUD inferior esquerdo, normalizado para 1080p."""
+        """Reconhece a barra própria de vida e sua cruz branca à esquerda."""
         imagem, _ = self.preparar(quadro, 1.0)
         recorte, _, _ = _roi(imagem, (0, 0.60, 0.45, 1))
         hsv = cv2.cvtColor(recorte, cv2.COLOR_BGR2HSV)
         altura, largura = hsv.shape[:2]
+        branco = cv2.inRange(hsv, (0, 0, 185), (180, 85, 255))
         # Duas faixas de brilho acomodam HUDs claros e escuros.
         for v_min in (155, 95):
             verde = cv2.inRange(hsv, (28, 120, v_min), (82, 255, 255))
@@ -273,7 +309,8 @@ class Detector:
                 if not (10 <= h <= 60 and w >= 1.2 * h and x < 0.35 * largura and y > 0.4 * altura):
                     continue
                 if (cv2.countNonZero(verde[y:y + h, x:x + w]) >= 0.60 * w * h
-                        and hsv[y:y + h, x:x + w, 0].mean() < 42):
+                        and hsv[y:y + h, x:x + w, 0].mean() < 65
+                        and _cruz_da_vida(branco, x, y, h)):
                     return True
         return False
 
@@ -433,10 +470,18 @@ class Fluxo:
 
     def rearmar_fila(self):
         """Permite uma nova tentativa somente após ação explícita de iniciar."""
-        if self._prazo_fila is None or self._fila_expirada:
-            if self._fila_expirada:
-                self._encerrar_espera_fila()
-            self._fila_bloqueada = False
+        if self._fila_contada and not self._fila_expirada:
+            return False
+        recuperando = self._movimento_exige_transicao or self._pendente in BOTOES_FILA
+        if recuperando:
+            self._encerrar_espera_fila()
+            if self._pendente in BOTOES_FILA:
+                self._pendente, self._tentativas = None, 0
+            self._movimento_exige_transicao = False
+            self._proxima_acao = 0.0
+            self.pausar()
+        self._fila_bloqueada = False
+        return recuperando
 
     def _procurar(self, quadro, *nomes):
         return self.detector.procurar(quadro, nomes)
@@ -489,10 +534,10 @@ class Fluxo:
                 self._quadros_sem_hud >= 4 and agora - self._inicio_sem_sinais >= 0.65
             )
 
-    def _verificar_clique(self, quadro, agora, hud_visivel, no_onibus):
+    def _verificar_clique(self, quadro, agora, hud_visivel, no_onibus, partida=False):
         nome = self._pendente
         abriu_modal = nome == "voltar_lobby" and self.detector.ler_contexto(quadro, "confirmar_sair")
-        alvo = None if abriu_modal else self._alvo(quadro, nome)
+        alvo = None if abriu_modal or (partida and nome in BOTOES_LOBBY) else self._alvo(quadro, nome)
         if nome in ("voltar_lobby", "confirmar_sair") and self.detector.dialogo_ambiguo:
             self._quadros_sem_alvo = 0
             return None
@@ -599,7 +644,7 @@ class Fluxo:
         hud_visivel = partida if hud_visivel is None else hud_visivel
         if self._pendente:
             self.motivo_anti_afk = "verificando_clique"
-            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus)
+            return self._verificar_clique(quadro, agora, hud_visivel, no_onibus, partida)
         if self._bloqueado and self._alvo(quadro, self._bloqueado) is None:
             self._quadros_sem_alvo += 1
             if self._quadros_sem_alvo >= 2:
@@ -651,7 +696,7 @@ class Fluxo:
             self._prazo_lobby = None
             return Acao("lobby_nao_encontrado")
         alvo = self._procurar(quadro, "resgatar")
-        if alvo is None and not self._fila_bloqueada:
+        if alvo is None and not (self._fila_bloqueada or partida or espectando or no_onibus or asa_delta):
             alvo = self._procurar(quadro, *BOTOES_LOBBY)
         if alvo:
             self.inicio_partida = None

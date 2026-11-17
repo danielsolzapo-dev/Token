@@ -128,7 +128,9 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 estado = ("Espectando" if bloqueio_hud else "No ônibus" if onibus else
                           "Descendo de asa-delta" if asa_delta else "Em partida" if partida else
                           "Procurando botões")
-                if partida and contagem_esquadrao:
+                if fluxo.motivo_anti_afk == "aguardando_transicao_da_fila":
+                    estado = "Aguardando transição da fila"
+                elif partida and contagem_esquadrao:
                     estado = f"Em partida · {contagem_esquadrao} no HUD do esquadrão"
                 tem_entrada = acao is not None and (bool(acao.passos) or acao.tipo in ("clicar", "esc"))
                 if diagnostico and acao and (tem_entrada or acao.tipo != ultimo_tipo):
@@ -343,7 +345,8 @@ class Painel:
             self.fluxo = Fluxo(Detector(config=config))
         else:
             self.fluxo.config = self.fluxo.detector.config = config
-        self.fluxo.rearmar_fila()
+        if self.fluxo.rearmar_fila() and self.diagnostico:
+            self.diagnostico.registrar("espera_fila_rearmada_por_iniciar")
         self.status.set("Iniciando")
         self.botao.configure(text="Pausar")
         self.parar = Event()
@@ -439,7 +442,8 @@ def verificar_build():
     detector = Detector()
     if faltando := TEMPLATES.keys() - detector.templates.keys():
         raise RuntimeError("Imagens ausentes no pacote: " + ", ".join(sorted(faltando)))
-    for nome, (x, y) in (("jogar", (650, 210)), ("continuar", (650, 448)), ("lobby_jogar", (20, 420))):
+    for nome, (x, y) in (("jogar", (650, 210)), ("continuar", (650, 448)), ("lobby_pronto", (20, 420)),
+                        ("lobby_jogar", (20, 420))):
         template = detector.templates[nome]
         h, w = template.shape[:2]
         quadro = np.zeros((540, 960, 3), dtype=np.uint8)
@@ -452,7 +456,12 @@ def verificar_build():
         raise RuntimeError("Falha na integração do fluxo de lobby.")
     hud = np.zeros((540, 960, 3), dtype=np.uint8)
     hud[475:486, 32:105] = (0, 215, 145)
-    if not detector.em_partida(hud) or detector.em_partida(np.zeros_like(hud)):
+    if detector.em_partida(hud):
+        raise RuntimeError("Uma barra verde sem cruz foi confundida com HUD.")
+    hud[477:484, 25:27] = 255
+    hud[479:482, 23:30] = 255
+    hud = hud.copy()
+    if not detector.em_partida(hud):
         raise RuntimeError("Falha na leitura da barra de vida.")
     fluxo_sem_fila = Fluxo(detector)
     for instante in (0, 0.3, 0.8, 1.1, 1.5):

@@ -135,6 +135,33 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.fluxo.partidas, 0)
         self.assertIsNone(self.fluxo.inicio_partida)
 
+    def test_pronto_nao_e_clicado_quando_hud_aparece_no_segundo_quadro(self):
+        self.assertIsNone(self.passo(0, "lobby_pronto", cursor=True))
+        self.assertIsNone(self.passo(0.2, "lobby_pronto", cursor=True, partida=True))
+        self.assertIsNone(self.passo(0.4, "lobby_pronto", cursor=True))
+        self.assertEqual(self.passo(0.6, "lobby_pronto", cursor=True).alvo.nome, "lobby_pronto")
+
+    def test_retomar_descarta_fila_nao_confirmada_e_reconhece_partida_manual(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
+        self.iniciar_clique("lobby_pronto")
+        self.assertIsNone(self.passo(2, partida=True))
+        self.assertEqual(self.passo(2.2, partida=True).tipo, "aguardando_fila")
+        self.assertIsNone(self.passo(2.4, partida=True))
+        self.assertTrue(self.fluxo.rearmar_fila())
+        self.assertIsNone(self.passo(3, partida=True))
+        self.assertEqual(self.passo(3.4, partida=True).tipo, "movimento")
+        self.assertEqual(self.fluxo.partidas, 0)
+
+    def test_retomar_preserva_fila_ja_confirmada(self):
+        self.iniciar_clique("lobby_jogar")
+        self.passo(2)
+        self.passo(2.2)
+        self.passo(2.4, "fila")
+        self.assertEqual(self.passo(3.5, "fila").tipo, "fila_confirmada")
+        self.assertFalse(self.fluxo.rearmar_fila())
+        self.assertIsNone(self.passo(4.5, "lobby_pronto"))
+        self.assertEqual(self.fluxo.partidas, 1)
+
     def test_clique_aceito_e_perda_de_foco_conta_uma_unica_tentativa(self):
         self.assertIsNone(self.passo(0, "jogar"))
         acao = self.passo(0.2, "jogar")

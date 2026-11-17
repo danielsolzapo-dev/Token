@@ -53,6 +53,11 @@ def combinar(linhas, *, vertical=False):
 
 
 def identificar(linhas, largura, altura, tipo, *, sinalizar_ambiguidade=False):
+    if tipo == "pronto_lobby":
+        rotulos = {normalizar(linha.texto): linha for linha in linhas}
+        if any(texto == "ESC" or texto.startswith("ESC ") for texto in rotulos):
+            return None
+        return rotulos.get("PRONTO") or rotulos.get("READY") or rotulos.get("READY UP")
     if tipo in ("jogar_modo", "modo_esquadrao"):
         direita = [linha for linha in linhas if linha.centro[0] >= 0.56 * largura]
         por_texto = {normalizar(linha.texto): linha for linha in combinar(direita)}

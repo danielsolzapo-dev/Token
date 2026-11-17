@@ -16,6 +16,8 @@ Na tela de seleção de modo, o botão amarelo **Jogar** à direita só é aceit
 
 O contador avança uma vez por fila reconhecida. Depois que o app tenta entrar na fila, ele aguarda uma transição de HUD antes de iniciar o cronômetro e liberar o movimento. Se você abrir o painel durante uma partida em andamento, o HUD estável libera o anti-AFK com o cronômetro de saída desarmado. Um botão de lobby reaparecendo não reinicia a fila sozinho: depois do timeout, recomece com **Iniciar/F6** ou aguarde o reconhecimento explícito de cancelamento.
 
+**Pronto** exige confirmação do texto no botão amarelo. Em uma partida reconhecida, o app bloqueia os cliques normais de lobby. Se pausar e retomar com **F6**, o app faz uma nova leitura da tela e descarta uma tentativa de fila ainda sem confirmação.
+
 O anti-AFK fica bloqueado no ônibus, no inventário, em modo espectador, com HUD indisponível ou durante pausa ou perda de foco. A janela e suas coordenadas são validadas antes de cada ação e entre segmentos de entrada. O Windows recebe entradas globais; essas verificações reduzem o risco de enviar comandos fora do jogo, mas não eliminam a corrida entre a última validação e o envio.
 
 A rotina aérea opcional agradece com **B** e salta com **Espaço** após duas leituras do aviso de ônibus em uma fila iniciada pelo app. Se o aviso de asa-delta permanecer visível por 8 segundos após o salto, envia **Espaço** uma vez. O tempo padrão é 7,5 minutos. O painel sinaliza modo espectador e registra pares de barras de companheiros após três leituras estáveis, sem usar uma ausência de barras para decidir sair.
