@@ -39,7 +39,7 @@ Em **Regiões por horário**, ative a programação para Construção e Zero Bui
 1. Reproduza a falha e pressione **F7**. Isso marca o horário no registro da sessão.
 2. Clique em **Copiar diagnóstico** no painel e cole o texto ao relatar a falha.
 
-O registro fica em `%LOCALAPPDATA%\AutoFarmToken\diagnostico.log`, com até duas cópias rotativas. Ele registra estados do jogo, decisões e os comandos que o app tentou enviar. O resultado `enviada` indica que a rotina de entrada do Windows terminou; a resposta no Fortnite precisa ser observada no jogo. O app mantém os registros localmente, sem capturas de tela ou histórico das teclas que você digitou.
+O registro fica em `%LOCALAPPDATA%\AutoFarmToken\diagnostico.log`, com até duas cópias rotativas. Ele registra estados do jogo, decisões e os comandos que o app tentou enviar. O resultado `enviada` indica que a rotina de entrada do Windows terminou. Em caso de falha na troca de região, a última captura das configurações fica no arquivo local `debug\regiao_ultima_falha.jpg`, na mesma pasta do diagnóstico.
 
 Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção depende da resolução, escala e idioma da interface do jogo e pode precisar de ajustes após atualizações do Fortnite. Confirme se automação de entradas é permitida pelas regras do jogo; não use o aplicativo se isso violar as regras ou políticas aplicáveis.
 

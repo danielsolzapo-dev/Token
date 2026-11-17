@@ -21,7 +21,7 @@ from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao
                          criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
 from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
-from regiao import MANHA, NOITE, regiao_por_horario
+from regiao import AMERICA_DO_NORTE, MANHA, NOITE, NORTE, regiao_por_horario
 from relogio_painel import RelogioPainel
 from versao import VERSAO
 from webhook import ErroWebhook, enviar_webhook, validar_url
@@ -77,6 +77,25 @@ def salvar_config(config):
     provisoria.replace(CONFIG)
 
 
+def salvar_falha_regiao(quadro, diagnostico):
+    if quadro is None:
+        diagnostico.registrar("falha_regiao")
+        return
+    caminho = ARQUIVO_LOG.parent / "debug" / "regiao_ultima_falha.jpg"
+    try:
+        ok, imagem = cv2.imencode(".jpg", quadro, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        if not ok:
+            raise ValueError("Captura inválida")
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        provisoria = caminho.with_suffix(".tmp")
+        provisoria.write_bytes(imagem.tobytes())
+        provisoria.replace(caminho)
+    except (OSError, ValueError, cv2.error):
+        diagnostico.registrar("falha_regiao", captura="indisponivel")
+    else:
+        diagnostico.registrar("falha_regiao", captura="debug/regiao_ultima_falha.jpg")
+
+
 def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     estado_anterior = acao_anterior = None
     dialogo_ambiguo_anterior = False
@@ -85,6 +104,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     ultimo_tipo = None
     ordem = 0
     captura_resgate = None
+    tela_regiao_anterior = leitura_regiao_anterior = captura_regiao = None
     prazo_anterior = fluxo.prazo_saida
     eventos.put(("prazo_saida", prazo_anterior))
     proximo_esquadrao = 0.0
@@ -141,6 +161,25 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                    asa_delta=asa_delta, espectando=bool(bloqueio_hud))
                 if parar.is_set():
                     break
+                if diagnostico and fluxo.motivo_anti_afk == "ajustando_regiao":
+                    tela = fluxo.regiao.ultima_tela
+                    if tela is not None and tela is not tela_regiao_anterior:
+                        tela_regiao_anterior = tela
+                        if tela.configuracoes:
+                            captura_regiao = quadro
+                        principal, subregiao = tela.pareamento, tela.subregiao
+                        seletor = subregiao if (principal and principal.valor == AMERICA_DO_NORTE
+                                               and fluxo.regiao.alvo in NORTE) else principal
+                        dados = (fluxo.regiao.alvo, tela.social, tela.configuracoes,
+                                 principal.valor if principal else None, subregiao.valor if subregiao else None,
+                                 bool(seletor and seletor.focada), bool(seletor and seletor.esquerda),
+                                 bool(seletor and seletor.direita), bool(tela.aplicar))
+                        if dados != leitura_regiao_anterior:
+                            leitura_regiao_anterior = dados
+                            diagnostico.registrar("leitura_regiao", alvo=dados[0], social=dados[1],
+                                                  configuracoes=dados[2], pareamento=dados[3], subregiao=dados[4],
+                                                  foco_seletor=dados[5], seta_esquerda=dados[6],
+                                                  seta_direita=dados[7], aplicar=dados[8])
                 leituras = (True, hud_visivel, partida, cursor, onibus, asa_delta, fluxo.motivo_anti_afk)
                 if diagnostico and (leituras != leituras_anteriores or agora >= proximo_registro):
                     diagnostico.registrar("leitura", foco=True, hud=hud_visivel, partida=partida,
@@ -170,10 +209,13 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 tem_entrada = acao is not None and (bool(acao.passos) or acao.tipo in ("clicar", "esc", "apontar"))
                 if diagnostico and acao and (tem_entrada or acao.tipo != ultimo_tipo):
                     ordem += 1
+                    posicao = ({"centro": tuple(round(v) for v in acao.alvo.centro)}
+                               if acao.tipo in ("clicar", "apontar") and acao.alvo.nome.startswith("regiao_")
+                               else {})
                     diagnostico.registrar("acao", id=ordem, tipo=acao.tipo,
                                           alvo=acao.alvo.nome if acao.alvo else None,
                                           tentativa=acao.tentativa + 1 if acao.tipo == "clicar" else None,
-                                          passos=acao.passos)
+                                          passos=acao.passos, **posicao)
                 ultimo_tipo = acao.tipo if acao else None
                 etapa = "enviar_entrada"
                 executada = acao is not None and (not tem_entrada or windows.executar(janela, acao, parar))
@@ -181,6 +223,10 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     motivo = None if executada else windows.motivo_interrupcao(janela, parar)
                     diagnostico.registrar("resultado_entrada", id=ordem,
                                           resultado="enviada" if executada else "interrompida", motivo=motivo)
+                if diagnostico and acao and acao.tipo in ("regiao_falhou", "regiao_ok"):
+                    if acao.tipo == "regiao_falhou":
+                        salvar_falha_regiao(captura_regiao, diagnostico)
+                    tela_regiao_anterior = leitura_regiao_anterior = captura_regiao = None
                 if acao and acao.tipo == "clicar" and not acao.alvo.nome.startswith("regiao_"):
                     fluxo.registrar_clique(acao, executada, time.monotonic(), no_onibus=onibus)
                     if executada and acao.alvo.nome == "resgatar":

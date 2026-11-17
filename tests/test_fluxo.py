@@ -784,6 +784,15 @@ class WindowsTest(unittest.TestCase):
         windows._entrada = Lock()
         return windows
 
+    def test_seta_do_teclado_usa_scancode_estendido(self):
+        windows = self.criar_windows()
+        enviados = []
+        windows._enviar = enviados.append
+        windows._tecla(0xE04D)
+        windows._tecla(0xE04D, soltando=True)
+        self.assertEqual([(ev.dados.tecla.scan, ev.dados.tecla.flags) for ev in enviados],
+                         [(0x4D, 9), (0x4D, 11)])
+
     def test_pausa_espera_soltar_tecla_e_bloqueia_nova_entrada(self):
         windows = self.criar_windows()
         janela = Janela(1, (0, 0, 100, 100))

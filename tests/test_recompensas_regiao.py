@@ -91,6 +91,46 @@ class RegiaoTest(unittest.TestCase):
         self.assertEqual(tela.pareamento.valor, AMERICA_DO_NORTE)
         self.assertEqual(tela.subregiao.valor, "Automática")
 
+    def test_linha_deslocada_com_mouse_mantem_o_seletor_focado(self):
+        linhas = [Linha("IDIOMA E REGIÃO", (125, 123, 248, 32)),
+                  Linha("Região de Pareamento", (816, 123, 235, 25)),
+                  Linha("Região de Pareamento", (144, 188, 236, 25)),
+                  Linha("Automático (15ms)", (501, 188, 190, 25)),
+                  Linha("Preferência de Subregião", (145, 256, 263, 25)),
+                  Linha("Automática", (535, 258, 120, 23))]
+        tela = ler_tela_regiao(linhas, 1440, 900)
+        self.assertEqual(tela.pareamento.valor, "Automática")
+        self.assertTrue(tela.pareamento.focada)
+        self.assertFalse(tela.subregiao.focada)
+        self.assertEqual(tela.pareamento.caixa, linhas[3].caixa)
+
+    def test_seletor_com_rotulo_e_valor_na_mesma_caixa(self):
+        linhas = [Linha("IDIOMA E REGIÃO", (125, 123, 248, 32)),
+                  Linha("Região de Pareamento Europa (210 ms)", (144, 188, 520, 25))]
+        tela = ler_tela_regiao(linhas, 1440, 900)
+        self.assertEqual(tela.pareamento.valor, "Europa")
+
+    def test_seta_do_teclado_exige_seletor_focado(self):
+        fluxo = RegiaoLobby()
+        fluxo.iniciar("Europa", 0)
+        linha = LinhaRegiao((501, 188, 190, 25), "Automática")
+        tela = TelaRegiao(configuracoes=True, pareamento=linha)
+        self.assertEqual(fluxo.passo(tela, 1).tipo, "apontar")
+        self.assertEqual(fluxo.passo(tela, 2).etapa, "selecionar_pareamento")
+        self.assertIsNone(fluxo.passo(tela, 3))
+        focada = LinhaRegiao(linha.caixa, linha.valor, focada=True)
+        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=focada), 4).tecla, 0xE04D)
+
+    def test_sem_mudanca_fecha_configuracoes_e_libera_lobby(self):
+        fluxo = RegiaoLobby()
+        fluxo.iniciar("Europa", 0)
+        voltar = (1281, 847, 81, 23)
+        tela = TelaRegiao(configuracoes=True, voltar=voltar)
+        self.assertIsNone(fluxo.passo(tela, 1))
+        ordem = fluxo.passo(tela, 15)
+        self.assertEqual((ordem.tipo, ordem.etapa, ordem.caixa), ("clicar", "fechar_configuracoes", voltar))
+        self.assertEqual(fluxo.passo(TelaRegiao(), 16, lobby=True).tipo, "falhou")
+
     def test_escolhe_subregiao_confirma_aplicar_e_volta_ao_lobby(self):
         fluxo = RegiaoLobby()
         caixa = (10, 20, 30, 40)

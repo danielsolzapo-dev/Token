@@ -189,7 +189,8 @@ class Windows:
             raise excecao
 
     def _tecla(self, scan, soltando=False):
-        self._enviar(Entrada(1, Dados(tecla=Tecla(scan=scan, flags=8 | (2 if soltando else 0)))))
+        estendida = 1 if scan > 0xFF else 0
+        self._enviar(Entrada(1, Dados(tecla=Tecla(scan=scan & 0xFF, flags=8 | estendida | (2 if soltando else 0)))))
 
     def _mouse(self, flags, dx=0, dy=0):
         self._enviar(Entrada(0, Dados(mouse=Mouse(dx=dx, dy=dy, flags=flags))))
@@ -232,7 +233,7 @@ class Windows:
                 except OSError as erro:
                     falha = falha or erro
                     try:
-                        self.user.keybd_event(0, scan, 8 | 2, 0)
+                        self.user.keybd_event(0, scan & 0xFF, 8 | 2 | (1 if scan > 0xFF else 0), 0)
                     except OSError as erro_fallback:
                         falha = falha or erro_fallback
             if falha is not None:

@@ -45,9 +45,10 @@ def identificar_regiao(texto):
 @dataclass(frozen=True)
 class LinhaRegiao:
     caixa: tuple[int, int, int, int]
-    valor: str
+    valor: str | None
     direita: tuple | None = None
     esquerda: tuple | None = None
+    focada: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,22 +86,42 @@ def ler_tela_regiao(linhas, largura, altura):
     configuracoes = titulo or bool(voltar and restaurar)
 
     def linha_regiao(predicado):
-        for rotulo, texto in rotulos:
-            if not (0.14 * altura <= rotulo.centro[1] <= 0.46 * altura and
-                    0.20 * largura < rotulo.centro[0] <= 0.50 * largura and predicado(texto)):
+        focada = any(0.55 * largura <= l.caixa[0] and 0.12 * altura <= l.centro[1] <= 0.40 * altura
+                     and predicado(t) is not None for l, t in rotulos)
+        linhas_sem_valor = []
+        for rotulo, sufixo in ((l, predicado(t)) for l, t in rotulos):
+            if (sufixo is None or not 0.14 * altura <= rotulo.centro[1] <= 0.46 * altura
+                    or not 0.10 * largura <= rotulo.caixa[0] <= 0.44 * largura):
                 continue
             direita = [(l, identificar_regiao(l.texto)) for l, _ in rotulos
-                       if rotulo.caixa[0] + 0.13 * largura < l.caixa[0] < 0.65 * largura
+                       if rotulo.caixa[0] + 0.13 * largura < l.caixa[0] < 0.67 * largura
                        and abs(l.centro[1] - rotulo.centro[1]) < 0.028 * altura]
             for linha, valor in direita:
                 if valor:
-                    return LinhaRegiao(linha.caixa, valor)
-        return None
+                    return LinhaRegiao(linha.caixa, valor, focada=focada)
+            # A linha pode virar uma só caixa ao ganhar destaque. Mantém a posição
+            # do seletor ancorada no rótulo mesmo quando o texto do valor se perde.
+            x, y, w, h = rotulo.caixa
+            valor = identificar_regiao(sufixo)
+            caixa_valor = round(x + 0.17 * largura), y, round(0.12 * largura), h
+            linha = LinhaRegiao(caixa_valor, valor, focada=focada)
+            if valor:
+                return linha
+            linhas_sem_valor.append(linha)
+        return linhas_sem_valor[0] if linhas_sem_valor else None
 
-    pareamento = linha_regiao(lambda t: t.startswith(("REGIAO DE PAREAMENT", "MATCHMAKING REGION"))) if titulo else None
-    subregiao = linha_regiao(lambda t: "DE SUBREGI" in t or "SUBREGION PREFERENCE" in t) if titulo else None
+    def rotulo_pareamento(texto):
+        trecho = re.match(r"(?:REGIAO (?:DE |DO )?PAREAMENT[O0]?|MATCHMAKING REGION)\b\s*(.*)", texto)
+        return trecho[1] if trecho else None
+
+    def rotulo_subregiao(texto):
+        trecho = re.match(r"(?:.*?DE SUBREGIA[O0]|SUBREGION PREFERENCE)\b\s*(.*)", texto)
+        return trecho[1] if trecho else None
+
+    pareamento = linha_regiao(rotulo_pareamento) if configuracoes else None
+    subregiao = linha_regiao(rotulo_subregiao) if configuracoes else None
     aba_jogo = (round(largura * 0.38), round(altura * 0.023), round(largura * 0.04), round(altura * 0.04))
-    return TelaRegiao(social, configuracoes, engrenagem, aba_jogo if configuracoes and not titulo else None,
+    return TelaRegiao(social, configuracoes, engrenagem, aba_jogo if configuracoes and not (titulo or pareamento) else None,
                       pareamento, subregiao, aplicar, voltar, descartar)
 
 
@@ -109,6 +130,7 @@ class OrdemRegiao:
     tipo: str
     etapa: str
     caixa: tuple | None = None
+    tecla: int | None = None
 
 
 class RegiaoLobby:
@@ -122,6 +144,11 @@ class RegiaoLobby:
         self.sentido = "direita"
         self.alterou = False
         self.proxima = self.prazo = 0.0
+        self._assinatura = None
+        self._ultima_mudanca = 0.0
+        self._apontou = self._selecionou = False
+        self._esc_social = 0
+        self.ultima_tela = None
 
     def iniciar(self, alvo, agora):
         if alvo == self.confirmada or (alvo == self.falhou and agora < self.repetir_em):
@@ -135,6 +162,10 @@ class RegiaoLobby:
         self.visitados.clear()
         self.sentido = "direita"
         self.alterou = False
+        self._assinatura, self._ultima_mudanca = None, agora
+        self._apontou = self._selecionou = False
+        self._esc_social = 1
+        self.ultima_tela = None
         return OrdemRegiao("esc", "abrir_social")
 
     def pronto(self, agora):
@@ -144,9 +175,9 @@ class RegiaoLobby:
         self.fechando = False
         self.prazo = agora
 
-    def _ordem(self, agora, tipo, etapa, caixa=None):
+    def _ordem(self, agora, tipo, etapa, caixa=None, tecla=None):
         self.proxima = agora + (0.65 if tipo == "apontar" else 0.85)
-        return OrdemRegiao(tipo, etapa, caixa)
+        return OrdemRegiao(tipo, etapa, caixa, tecla)
 
     def _terminar(self, agora, ok):
         if ok:
@@ -159,14 +190,24 @@ class RegiaoLobby:
     def passo(self, tela, agora, *, lobby=False):
         if not self.pronto(agora):
             return None
-        if agora >= self.prazo and self.fechando is None:
+        self.ultima_tela = tela
+        principal, sub = tela.pareamento, tela.subregiao
+        assinatura = (tela.social, tela.configuracoes, principal and (principal.valor, principal.focada),
+                      sub and (sub.valor, sub.focada),
+                      bool(tela.aplicar), bool(tela.descartar), lobby)
+        if assinatura != self._assinatura:
+            self._assinatura, self._ultima_mudanca = assinatura, agora
+        if self.fechando is None and (agora >= self.prazo or agora - self._ultima_mudanca >= 14):
             self.fechando = False
+            self.prazo = agora
         if self.fechando is not None:
             if agora >= self.prazo + 12:
                 return self._terminar(agora, False)
             if tela.descartar:
                 return self._ordem(agora, "clicar", "descartar", tela.descartar)
             if tela.configuracoes:
+                if tela.voltar:
+                    return self._ordem(agora, "clicar", "fechar_configuracoes", tela.voltar)
                 return self._ordem(agora, "esc", "fechar_configuracoes")
             if tela.social:
                 return self._ordem(agora, "esc", "fechar_social")
@@ -174,7 +215,6 @@ class RegiaoLobby:
                 return self._terminar(agora, self.fechando)
             return None
 
-        principal, sub = tela.pareamento, tela.subregiao
         if principal:
             alvo_na = self.alvo in NORTE
             concluido = (principal.valor == self.alvo or
@@ -187,6 +227,8 @@ class RegiaoLobby:
                     return None
                 self.fechando = True
                 self.prazo = min(self.prazo, agora + 8)
+                if tela.voltar:
+                    return self._ordem(agora, "clicar", "fechar_configuracoes", tela.voltar)
                 return self._ordem(agora, "esc", "fechar_configuracoes")
             nome = "subregiao" if alvo_na and principal.valor == AMERICA_DO_NORTE else "pareamento"
             linha = sub if nome == "subregiao" else principal
@@ -197,7 +239,8 @@ class RegiaoLobby:
             return self._ordem(agora, "clicar", "abrir_aba_jogo", tela.aba_jogo)
         if tela.social and tela.engrenagem:
             return self._ordem(agora, "clicar", "abrir_configuracoes", tela.engrenagem)
-        if lobby and not (tela.social or tela.configuracoes):
+        if lobby and not (tela.social or tela.configuracoes) and self._esc_social < 2:
+            self._esc_social += 1
             return self._ordem(agora, "esc", "abrir_social")
         return None
 
@@ -206,11 +249,12 @@ class RegiaoLobby:
             self.linha, self.valor_anterior = nome, None
             self.visitados.clear()
             self.tentativas, self.sentido = 0, "direita"
+            self._apontou = self._selecionou = False
         if linha.valor != self.valor_anterior:
             self.valor_anterior = linha.valor
             self.tentativas = 0
         seta = getattr(linha, self.sentido)
-        if (self.sentido, linha.valor) in self.visitados and self.tentativas != 1:
+        if linha.valor and (self.sentido, linha.valor) in self.visitados and self.tentativas != 1:
             self.sentido = "esquerda" if self.sentido == "direita" else "direita"
             seta = getattr(linha, self.sentido)
         if not seta:
@@ -218,8 +262,19 @@ class RegiaoLobby:
             if seta:
                 self.sentido = "esquerda" if self.sentido == "direita" else "direita"
         if seta is None:
-            return self._ordem(agora, "apontar", nome, linha.caixa)
-        self.visitados.add((self.sentido, linha.valor))
+            if not self._apontou:
+                self._apontou = True
+                return self._ordem(agora, "apontar", nome, linha.caixa)
+            if not linha.focada:
+                if not self._selecionou:
+                    self._selecionou = True
+                    return self._ordem(agora, "clicar", f"selecionar_{nome}", linha.caixa)
+                return None
+        if linha.valor:
+            self.visitados.add((self.sentido, linha.valor))
         self.tentativas += 1
         self.alterou = True
-        return self._ordem(agora, "clicar", nome, seta)
+        if seta:
+            return self._ordem(agora, "clicar", nome, seta)
+        tecla = 0xE04D if self.sentido == "direita" else 0xE04B
+        return self._ordem(agora, "tecla", nome, tecla=tecla)

@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from embarque import Embarque
-from regiao import MANHA, NOITE, RegiaoLobby, ler_tela_regiao, regiao_por_horario
+from regiao import AMERICA_DO_NORTE, MANHA, NOITE, RegiaoLobby, ler_tela_regiao, regiao_por_horario
 
 
 # Nome do PNG, região de busca (x0, y0, x1, y1) e fator de trabalho em 1080p.
@@ -292,7 +292,19 @@ class Detector:
 
     def tela_regiao(self, quadro):
         altura, largura = quadro.shape[:2]
-        tela = ler_tela_regiao(self._carregar_leitor().linhas(quadro), largura, altura)
+        leitor = self._carregar_leitor()
+        linhas = leitor.linhas(quadro)
+        tela = ler_tela_regiao(linhas, largura, altura)
+        principal, subregiao = tela.pareamento, tela.subregiao
+        precisa_detalhar = (not principal or not principal.valor
+                            or (principal.valor == AMERICA_DO_NORTE and (not subregiao or not subregiao.valor)))
+        if tela.configuracoes and precisa_detalhar:
+            recorte, x0, y0 = _roi(quadro, (0.10, 0.13, 0.66, 0.46))
+            detalhadas = []
+            for linha in leitor.linhas(_resize(recorte, 1.5)):
+                x, y, w, h = (round(v / 1.5) for v in linha.caixa)
+                detalhadas.append(replace(linha, caixa=(x + x0, y + y0, w, h)))
+            tela = ler_tela_regiao([*linhas, *detalhadas], largura, altura)
         if tela.social and not tela.engrenagem:
             gear = self.buscar_template(quadro, "engrenagem_lobby", 0.83)
             if gear and gear.score >= 0.83:
@@ -784,6 +796,9 @@ class Fluxo:
     def _acao_regiao(ordem, alvo):
         if ordem is None:
             return None
+        if ordem.tecla:
+            origem = Alvo(f"regiao_{ordem.etapa}", 1.0, (0, 0, 0, 0), None)
+            return Acao("tecla_regiao", origem, passos=(("teclas", (ordem.tecla,), 0.07),))
         if ordem.caixa:
             return Acao(ordem.tipo, Alvo(f"regiao_{ordem.etapa}", 1.0, ordem.caixa, None))
         if ordem.tipo == "esc":
