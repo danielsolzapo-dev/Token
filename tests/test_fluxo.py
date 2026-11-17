@@ -1,4 +1,6 @@
 from dataclasses import replace
+import ctypes
+from ctypes import wintypes
 import os
 from pathlib import Path
 from queue import SimpleQueue
@@ -973,6 +975,40 @@ class WindowsTest(unittest.TestCase):
                           (42, 0x202, 0, 30 | (40 << 16))])
         windows.user.SetCursorPos.assert_not_called()
         windows.user.SendInput.assert_not_called()
+
+    def test_clique_de_fundo_com_cursor_restaura_posicao_ao_pausar(self):
+        windows = self.criar_windows()
+        windows.user = Mock()
+        windows._cursor_parado = lambda: True
+        windows._posicao_cursor = Mock(side_effect=[(500, 600), (80, 110), (80, 110), (80, 110)])
+        windows._enviar_mouse_para_janela = Mock(return_value=True)
+        windows._esperar = Mock(side_effect=[True, False])
+        windows.disponivel = lambda *_: True
+        def clip(saida):
+            rect = ctypes.cast(saida, ctypes.POINTER(wintypes.RECT)).contents
+            rect.right, rect.bottom = 1920, 1080
+            return True
+        windows.user.GetClipCursor.side_effect = clip
+        janela = Janela(42, (50, 70, 150, 170), pid_fundo=15, cursor_fundo=True)
+        acao = Acao("clicar", Alvo("lobby_jogar", 1, (20, 30, 20, 20), 1))
+        self.assertFalse(windows.executar(janela, acao, Event()))
+        self.assertEqual([chamada.args for chamada in windows.user.SetCursorPos.call_args_list],
+                         [(80, 110), (500, 600)])
+        self.assertEqual([chamada.args[1] for chamada in windows._enviar_mouse_para_janela.call_args_list],
+                         [0x200, 0x201, 0x202])
+        windows.user.SendInput.assert_not_called()
+
+    def test_clique_de_fundo_espera_usuario_soltar_os_controles(self):
+        windows = self.criar_windows()
+        windows.user = Mock()
+        windows._cursor_parado = lambda: False
+        windows.disponivel = lambda *_: True
+        janela = Janela(42, (0, 0, 100, 100), pid_fundo=15, cursor_fundo=True)
+        acao = Acao("clicar", Alvo("lobby_jogar", 1, (20, 30, 20, 20), 1))
+        self.assertFalse(windows.executar(janela, acao, Event()))
+        self.assertEqual(windows._motivo_cursor_fundo, "mouse_ou_teclado_em_uso")
+        windows.user.SetCursorPos.assert_not_called()
+        windows.user.SendMessageTimeoutW.assert_not_called()
 
     def test_pausa_soltar_tecla_direcionada_a_janela_em_segundo_plano(self):
         windows = self.criar_windows()

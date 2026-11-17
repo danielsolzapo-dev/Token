@@ -36,7 +36,8 @@ FINALIZANDO_LEITURA = "Controles liberados. Finalizando a leitura da tela…"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
-          "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto", "segundo_plano")
+          "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto",
+          "segundo_plano", "cursor_segundo_plano")
 CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite", "aparencia")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
@@ -114,6 +115,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
             diagnostico.registrar("sessao_iniciada", versao=VERSAO, anti_afk=fluxo.config.anti_afk,
                                   saida_por_tempo=fluxo.config.sair_por_tempo,
                                   segundo_plano=fluxo.config.segundo_plano,
+                                  cursor_segundo_plano=fluxo.config.cursor_segundo_plano,
                                   minutos_partida=fluxo.config.minutos_partida)
         detector = fluxo.detector
         if faltando := TEMPLATES.keys() - detector.templates.keys():
@@ -250,13 +252,19 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                           passos=acao.passos, **posicao)
                 ultimo_tipo = acao.tipo if acao else None
                 etapa = "enviar_entrada"
-                executada = acao is not None and (not tem_entrada or windows.executar(janela, acao, parar))
+                com_cursor = em_fundo and tem_entrada and acao.tipo == "clicar" and fluxo.config.cursor_segundo_plano
+                janela_entrada = replace(janela, cursor_fundo=True) if com_cursor else janela
+                executada = acao is not None and (not tem_entrada or windows.executar(janela_entrada, acao, parar))
+                motivo = (windows.motivo_interrupcao(janela_entrada, parar)
+                          if tem_entrada and not executada and (diagnostico or com_cursor) else None)
                 if diagnostico and tem_entrada:
-                    motivo = None if executada else windows.motivo_interrupcao(janela, parar)
+                    metodo = ("mensagem_janela_cursor" if com_cursor else
+                              "mensagem_janela" if em_fundo else "send_input")
                     diagnostico.registrar("resultado_entrada", id=ordem,
-                                          resultado=("mensagem_enfileirada" if em_fundo else "enviada")
+                                          resultado=("mensagem_processada" if com_cursor else
+                                                     "mensagem_enfileirada" if em_fundo else "enviada")
                                           if executada else "interrompida", motivo=motivo,
-                                          metodo="mensagem_janela" if em_fundo else "send_input")
+                                          metodo=metodo)
                 if diagnostico and acao and acao.tipo in ("regiao_falhou", "regiao_ok"):
                     if acao.tipo == "regiao_falhou":
                         salvar_falha_regiao(captura_regiao, diagnostico)
@@ -328,7 +336,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 elif acao:
                     fluxo.pausar()
                     if not parar.is_set():
-                        texto = ("Comando interrompido em segundo plano."
+                        texto = ("Solte o mouse e o teclado por um instante para o clique em segundo plano."
+                                 if motivo == "mouse_ou_teclado_em_uso" else "Comando interrompido em segundo plano."
                                  if em_fundo else "Ação interrompida. Confira a janela e o foco do Fortnite.")
                         eventos.put(("acao", texto))
             else:
@@ -588,6 +597,7 @@ class Painel:
             ("rotina_aerea", "Saltar e fechar a asa-delta com Espaço"),
             ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
             ("segundo_plano", "Executar em segundo plano (experimental)"),
+            ("cursor_segundo_plano", "Permitir mover o cursor nos cliques em segundo plano"),
         ):
             ttk.Checkbutton(automacao, text=texto, variable=self.opcoes[nome], style=self.tema.switch).pack(fill="x")
         ttk.Frame(automacao, style="Separador.TFrame").pack(fill="x", pady=6)

@@ -34,6 +34,7 @@ class Janela:
     hwnd: int
     area: tuple[int, int, int, int]
     pid_fundo: int = 0
+    cursor_fundo: bool = False
 
 
 class Mouse(ctypes.Structure):
@@ -61,6 +62,10 @@ class Entrada(ctypes.Structure):
 class Cursor(ctypes.Structure):
     _fields_ = [("tamanho", wintypes.DWORD), ("flags", wintypes.DWORD),
                 ("cursor", wintypes.HANDLE), ("ponto", wintypes.POINT)]
+
+
+class UltimaEntrada(ctypes.Structure):
+    _fields_ = [("tamanho", wintypes.UINT), ("instante", wintypes.DWORD)]
 
 
 class CapturaJanela:
@@ -107,6 +112,7 @@ class Windows:
         self._fortnite_localizado = (0, 0)
         self._proxima_busca_fortnite = 0
         self._ponto_fundo = None
+        self._motivo_cursor_fundo = None
         self._trava_captura = Lock()
         self._captura_fundo = None
         self._repetir_captura_em = 0.0
@@ -129,6 +135,12 @@ class Windows:
         api.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
         api.MapVirtualKeyW.restype = wintypes.UINT
         api.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        api.SendMessageTimeoutW.argtypes = [
+            wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+            wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_size_t),
+        ]
+        api.SendMessageTimeoutW.restype = wintypes.LPARAM
+        api.GetLastInputInfo.argtypes = [ctypes.POINTER(UltimaEntrada)]
         api.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         api.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         api.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
@@ -141,6 +153,7 @@ class Windows:
         api.GetCursorInfo.argtypes = [ctypes.POINTER(Cursor)]
         api.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
         api.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        api.GetClipCursor.argtypes = [ctypes.POINTER(wintypes.RECT)]
         api.WindowFromPoint.argtypes = [wintypes.POINT]
         api.WindowFromPoint.restype = wintypes.HWND
         api.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
@@ -151,6 +164,7 @@ class Windows:
                                     wintypes.DWORD, ctypes.c_size_t]
         api.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
         self.kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self.kernel.GetTickCount.restype = wintypes.DWORD
         self.kernel.OpenProcess.restype = wintypes.HANDLE
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         self.kernel.QueryFullProcessImageNameW.argtypes = [
@@ -342,6 +356,8 @@ class Windows:
             return "fortnite_perdeu_foco"
         if self._area(janela.hwnd) != janela.area:
             return "area_da_janela_mudou"
+        if janela.cursor_fundo and self._motivo_cursor_fundo:
+            return self._motivo_cursor_fundo
         return "mensagem_de_janela_recusada" if janela.pid_fundo else "entrada_interrompida"
 
     def _enviar(self, evento):
@@ -387,6 +403,54 @@ class Windows:
             return False
         self._ponto_fundo = janela, (x, y)
         return True
+
+    def _enviar_mouse_para_janela(self, janela, mensagem, botao, coordenadas):
+        resultado = ctypes.c_size_t()
+        return (self._pid(janela.hwnd) == janela.pid_fundo
+                and bool(self.user.SendMessageTimeoutW(janela.hwnd, mensagem, botao, coordenadas,
+                                                       0x0002, 80, ctypes.byref(resultado))))
+
+    def _cursor_parado(self):
+        ultima = UltimaEntrada(tamanho=ctypes.sizeof(UltimaEntrada))
+        return bool(self.user.GetLastInputInfo(ctypes.byref(ultima))
+                    and ((self.kernel.GetTickCount() - ultima.instante) & 0xFFFFFFFF) >= 700)
+
+    def _posicao_cursor(self):
+        ponto = wintypes.POINT()
+        if self.user.GetCursorPos(ctypes.byref(ponto)):
+            return ponto.x, ponto.y
+        return None
+
+    def _clicar_fundo_com_cursor(self, janela, parar, x, y):
+        if not self._cursor_parado():
+            self._motivo_cursor_fundo = "mouse_ou_teclado_em_uso"
+            return False
+        anterior = self._posicao_cursor()
+        limites = wintypes.RECT()
+        if not (self.user.GetClipCursor(ctypes.byref(limites))
+                and limites.left <= x < limites.right and limites.top <= y < limites.bottom):
+            self._motivo_cursor_fundo = "cursor_fora_dos_limites_do_desktop"
+            return False
+        if anterior is None or not self.disponivel(janela, parar) or not self.user.SetCursorPos(x, y):
+            return False
+        destino = x, y
+        dados = self._coordenadas_mouse(x - janela.area[0], y - janela.area[1])
+        try:
+            if self._posicao_cursor() != destino:
+                return False
+            if not self._enviar_mouse_para_janela(janela, 0x200, 0, dados):
+                return False
+            if not self._esperar(janela, parar, 0.04) or self._posicao_cursor() != destino:
+                return False
+            try:
+                enviado = self._enviar_mouse_para_janela(janela, 0x201, 1, dados)
+                mantido = enviado and self._esperar(janela, parar, 0.035)
+            finally:
+                liberado = self._enviar_mouse_para_janela(janela, 0x202, 0, dados)
+            return bool(mantido and liberado)
+        finally:
+            if self._posicao_cursor() == destino:
+                self.user.SetCursorPos(*anterior)
 
     def _deslocar_mouse(self, janela, dx, dy):
         if not janela.pid_fundo:
@@ -475,6 +539,7 @@ class Windows:
 
     def executar(self, janela, acao, parar):
         with self._entrada:
+            self._motivo_cursor_fundo = None
             if parar.is_set():
                 return False
             return self._executar(janela, acao, parar)
@@ -494,6 +559,8 @@ class Windows:
             if not (esquerda <= x < direita and topo <= y < base):
                 return False
             if janela.pid_fundo:
+                if janela.cursor_fundo and acao.tipo == "clicar":
+                    return self._clicar_fundo_com_cursor(janela, parar, x, y)
                 if not self._apontar_fundo(janela, x - esquerda, y - topo):
                     return False
                 if acao.tipo == "apontar":
