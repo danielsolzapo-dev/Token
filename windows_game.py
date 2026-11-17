@@ -240,7 +240,7 @@ class Windows:
                 if tipo == "pausa":
                     ok = self._esperar(janela, parar, *dados)
                 elif tipo == "clique":
-                    ok = self._clique(janela, parar, *dados)
+                    ok = not self.cursor_visivel() and self._clique(janela, parar, *dados)
                 elif tipo == "mouse":
                     dx, dy, duracao = dados
                     ok = self._pressionar(janela, parar, (), duracao, dx, dy)

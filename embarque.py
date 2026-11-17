@@ -8,6 +8,7 @@ class Embarque:
     def reiniciar(self):
         self.saltou_em = None
         self.fechou_asa = False
+        self.fechou_em = None
         self.pausar()
 
     def pausar(self):
@@ -32,3 +33,8 @@ class Embarque:
             self.saltou_em = agora
         elif tipo == "fechar_asa":
             self.fechou_asa = True
+            self.fechou_em = agora
+
+    def em_transicao(self, agora):
+        return (self.saltou_em is not None and agora - self.saltou_em < 45
+                or self.fechou_em is not None and agora - self.fechou_em < 12)

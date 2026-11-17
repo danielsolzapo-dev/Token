@@ -75,7 +75,7 @@ class FluxoTest(unittest.TestCase):
         self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
         self.assertIsNone(self.passo(0, partida=True))
         self.assertIsNone(self.passo(0.3, partida=True))
-        self.assertEqual(self.passo(0.6, partida=True).passos, (("teclas", (17,), 0.8),))
+        self.assertEqual(self.passo(0.6, partida=True, cursor=True).passos, (("teclas", (17,), 1.45),))
         self.assertIsNone(self.fluxo.inicio_partida)
         self.assertEqual(self.fluxo.partidas, 0)
 
@@ -312,9 +312,9 @@ class FluxoTest(unittest.TestCase):
         self.habilitar_movimento()
         self.detector.fora_de_partida = lambda _: True
         self.assertIsNone(self.passo(0, "menu_aba", partida=True))
-        acao = self.passo(0.3, "menu_aba", partida=True)
+        acao = self.passo(0.3, "menu_aba", partida=True, cursor=True)
         self.assertEqual(acao.tipo, "movimento")
-        self.assertEqual(acao.passos, (("teclas", (17,), 0.8),))
+        self.assertEqual(acao.passos, (("teclas", (17,), 1.45),))
 
     def test_menu_de_saida_bloqueia_caminhada(self):
         self.habilitar_movimento()
@@ -334,10 +334,28 @@ class FluxoTest(unittest.TestCase):
     def test_anti_afk_reenvia_caminhada_mesmo_se_plano_so_girar_camera(self):
         self.habilitar_movimento()
         self.passo(0, partida=True)
-        self.assertEqual(self.passo(0.3, partida=True).passos, (("teclas", (17,), 0.8),))
+        self.assertEqual(self.passo(0.3, partida=True, cursor=True).passos, (("teclas", (17,), 1.45),))
         with patch("logica_autofarm.plano_anti_afk", return_value=([("mouse", 90, 0, 0.2)], (0, 0.8, 0))):
             self.assertEqual(self.passo(2, partida=True).passos, (("mouse", 90, 0, 0.2),))
-            self.assertEqual(self.passo(6, partida=True).passos, (("teclas", (17,), 0.8),))
+            self.assertEqual(self.passo(3, partida=True, cursor=True).passos, (("teclas", (17,), 1.45),))
+
+    def test_caminhada_gira_camera_e_equipa_picareta_antes_dos_cliques(self):
+        self.habilitar_movimento()
+        self.fluxo.config = replace(self.fluxo.config, tecla_picareta="1")
+        self.assertIsNone(self.passo(0, partida=True))
+        passos = self.passo(0.3, partida=True).passos
+        self.assertEqual(passos[0][:3], ("andar_mouse", (17,), 1.45))
+        self.assertNotEqual(passos[0][3], 0)
+        self.assertEqual(passos[1], ("teclas", (2,), 0.10))
+        self.assertEqual([p for p in passos if p[0] == "clique"], [("clique", 0.18)] * 2)
+
+    def test_picareta_desligada_preserva_movimento_de_camera(self):
+        self.habilitar_movimento()
+        self.fluxo.config = replace(self.fluxo.config, tecla_picareta="")
+        self.assertIsNone(self.passo(0, partida=True))
+        passos = self.passo(0.3, partida=True).passos
+        self.assertEqual(len(passos), 1)
+        self.assertEqual(passos[0][0], "andar_mouse")
 
     def test_hud_durante_queda_livre_nunca_dispara_caminhada_para_tras(self):
         self.habilitar_movimento()
@@ -345,7 +363,7 @@ class FluxoTest(unittest.TestCase):
         self.fluxo._desvio = (0, 2, 0)
         self.assertIsNone(self.passo(0.8, partida=True, asa_delta=False))
         acao = self.passo(1.2, partida=True, asa_delta=False)
-        self.assertEqual(acao.passos, (("teclas", (32,), 0.8),))
+        self.assertEqual(acao.passos, (("teclas", (32,), 1.45),))
 
     def test_perda_de_foco_exige_hud_reconfirmado_para_mover(self):
         self.habilitar_movimento()
@@ -577,6 +595,16 @@ class MonitorTest(unittest.TestCase):
 
 
 class WindowsTest(unittest.TestCase):
+    def test_golpe_cancelado_se_cursor_reaparece(self):
+        windows = object.__new__(Windows)
+        windows.disponivel = lambda *_: True
+        windows.cursor_visivel = lambda: True
+        with patch.object(Windows, "_clique") as clique:
+            janela = Janela(42, (0, 0, 100, 100))
+            acao = Acao("movimento", passos=(("clique", 0.18),))
+            self.assertFalse(windows.executar(janela, acao, Event()))
+            clique.assert_not_called()
+
     def test_geometria_mudou_antes_da_entrada(self):
         janela = Janela(42, (0, 0, 100, 100))
         windows = object.__new__(Windows)

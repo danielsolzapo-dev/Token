@@ -35,6 +35,8 @@ ACOES_AEREAS = {
     "saltar_onibus": (("teclas", (57,), 0.16),),
     "fechar_asa": (("teclas", (57,), 0.16),),
 }
+TECLAS_PICARETA = {"F": 33, "1": 2, "Q": 16, "E": 18, "G": 34, "C": 46, "V": 47}
+DURACAO_CAMINHADA = 1.45
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class Config:
     minutos_partida: float = 7.5
     anti_afk: bool = True
     rotina_aerea: bool = True
+    tecla_picareta: str = "F"
 
 
 @dataclass(frozen=True)
@@ -443,6 +446,7 @@ class Fluxo:
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
         self._proxima_caminhada = 0.0
+        self._proxima_picareta = 0.0
         self._movimento_exige_transicao = False
         self.motivo_anti_afk = "aguardando_hud"
         self.embarque = Embarque()
@@ -465,6 +469,7 @@ class Fluxo:
         self._sem_pulo_ate = 0.0
         self._quadros_hud_afk = 0
         self._proxima_caminhada = agora
+        self._proxima_picareta = agora
         self._inicio_hud_novo = None
         self._movimento_exige_transicao = False
 
@@ -758,6 +763,8 @@ class Fluxo:
             self.motivo_anti_afk = "confirmando_hud"
             return None
         self.motivo_anti_afk = "movimento_planejado"
+        transicao_aerea = self.embarque.em_transicao(agora)
+        camera_livre = not cursor and not transicao_aerea
         if agora >= self._proxima_caminhada:
             x, y, rumo = self._desvio
             radianos = math.radians(rumo)
@@ -766,17 +773,30 @@ class Fluxo:
             tecla = "W"
             if frente > 1:
                 tecla = "A" if lateral > 0 else "D"
-            duracao = 0.8
+            duracao = DURACAO_CAMINHADA
             x, y = _andar(x, y, rumo, tecla, duracao)
+            codigos = (TECLAS[tecla],)
+            if camera_livre:
+                giro = self.rng.choice((-1, 1)) * self.rng.randint(350, 650)
+                passos = [("andar_mouse", codigos, duracao, giro, self.rng.randint(-65, 80))]
+                rumo = _angulo(rumo + giro * 0.03)
+            else:
+                passos = [("teclas", codigos, duracao)]
+            picareta = TECLAS_PICARETA.get(self.config.tecla_picareta)
+            if camera_livre and picareta is not None and agora >= self._proxima_picareta:
+                passos += [("teclas", (picareta,), 0.10), ("pausa", 0.24),
+                           ("clique", 0.18), ("pausa", 0.16), ("clique", 0.18)]
+                self._proxima_picareta = agora + 5.0
             self._desvio = x, y, rumo
-            self._proxima_caminhada = agora + 5.0
-            self._proxima_acao = agora + duracao + 0.2
-            return Acao("movimento", passos=(("teclas", (TECLAS[tecla],), duracao),))
+            self._proxima_caminhada = agora + 2.6
+            total = sum(p[2] if p[0] in ("teclas", "andar_mouse") else p[-1] for p in passos)
+            self._proxima_acao = agora + total + 0.12
+            return Acao("movimento", passos=tuple(passos))
         if self._humor is None or agora >= self._troca_humor:
             self._humor = self.rng.choice([h for h in HUMORES if h != self._humor])
             self._troca_humor = agora + self.rng.uniform(20, 90)
         passos, self._desvio = plano_anti_afk(
-            self._desvio, not cursor, self._humor, not no_onibus and agora >= self._sem_pulo_ate,
+            self._desvio, camera_livre, self._humor, not transicao_aerea and agora >= self._sem_pulo_ate,
             rng=self.rng,
         )
         duracao = sum(p[2] if p[0] in ("teclas", "andar_mouse") else p[-1] for p in passos)
@@ -789,11 +809,11 @@ class Fluxo:
 TECLAS = {"W": 17, "A": 30, "D": 32}
 VETORES = {"W": (0, 1), "A": (-1, 0), "D": (1, 0)}
 PESOS = {"W": 3.0, "A": 1.0, "D": 1.0}
-TIPOS = ("explorar", "andar", "camera", "picareta", "pular", "agachar", "ajeitar")
+TIPOS = ("explorar", "andar", "camera", "pular", "agachar", "ajeitar")
 HUMORES = {
-    "calmo": ((6, 1.5, 1.5, 0.6, 0.5, 0.4, 0.3), 1.35),
-    "andando": ((9, 1.5, 1, 1, 1, 0.6, 0.5), 0.9),
-    "inquieto": ((5, 2, 1.5, 2.5, 2.5, 3, 3), 0.65),
+    "calmo": ((6, 1.5, 1.5, 0.5, 0.4, 0.3), 1.35),
+    "andando": ((9, 1.5, 1, 1, 0.6, 0.5), 0.9),
+    "inquieto": ((5, 2, 1.5, 2.5, 3, 3), 0.65),
 }
 
 
@@ -838,7 +858,7 @@ def plano_anti_afk(desvio, camera=True, humor="andando", pular=True, *, rng=rand
     n = rng.choices((1, 2, 3), weights=(5, 3, 1))[0]
     for i in range(n):
         pesos = [
-            0 if (tipo in ("camera", "picareta") and not camera)
+            0 if (tipo == "camera" and not camera)
             or (tipo == "pular" and (i > 0 or not pular)) else peso
             for tipo, peso in zip(TIPOS, HUMORES[humor][0])
         ]
@@ -846,7 +866,7 @@ def plano_anti_afk(desvio, camera=True, humor="andando", pular=True, *, rng=rand
         if tipo in ("explorar", "andar"):
             longa = tipo == "explorar"
             if longa:
-                duracao = min(4.5, max(0.8, rng.lognormvariate(math.log(2.0), 0.45)))
+                duracao = min(2.1, max(0.8, rng.lognormvariate(math.log(1.5), 0.45)))
                 correr = rng.random() < 0.45
             else:
                 duracao = min(1.4, max(0.1, rng.lognormvariate(math.log(0.45), 0.5)))
@@ -869,7 +889,7 @@ def plano_anti_afk(desvio, camera=True, humor="andando", pular=True, *, rng=rand
             if longa:
                 break
         elif tipo == "camera":
-            mx, my = rng.choice((-1, 1)) * rng.randint(700, 3000), rng.randint(-120, 120)
+            mx, my = rng.choice((-1, 1)) * rng.randint(400, 1300), rng.randint(-80, 80)
             passos.append(("mouse", mx, my, rng.uniform(0.12, 0.4)))
             sorte = rng.random()
             if sorte < 0.25:
@@ -883,11 +903,6 @@ def plano_anti_afk(desvio, camera=True, humor="andando", pular=True, *, rng=rand
                 passos.append(("mouse", volta, -my, rng.uniform(0.15, 0.4)))
                 mx += volta
             rumo = _angulo(rumo + mx * 0.03)
-        elif tipo == "picareta":
-            for k in range(rng.choices((1, 2, 3), weights=(3, 3, 2))[0]):
-                if k:
-                    passos.append(("pausa", rng.uniform(0.15, 0.35)))
-                passos.append(("clique", rng.uniform(0.05, 0.12)))
         elif tipo == "pular":
             passos.append(("teclas", [57], rng.uniform(0.05, 0.15)))
         elif tipo == "ajeitar":

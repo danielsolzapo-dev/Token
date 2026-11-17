@@ -44,7 +44,7 @@ class DiagnosticoTest(unittest.TestCase):
 
         windows = SimpleNamespace(
             fortnite_em_foco=lambda: object(), capturar=lambda _: quadro,
-            disponivel=lambda *_: True, cursor_visivel=lambda: False, executar=falhar,
+            disponivel=lambda *_: True, cursor_visivel=lambda: True, executar=falhar,
         )
         with TemporaryDirectory() as pasta:
             log = Diagnostico(Path(pasta) / "diagnostico.log")
@@ -54,7 +54,7 @@ class DiagnosticoTest(unittest.TestCase):
                     monitorar(windows, fluxo, SimpleQueue(), Event(), log)
                 texto = log.texto()
                 self.assertIn('"anti_afk":"confirmando_hud"', texto)
-                self.assertIn('"passos":[["teclas",[17],0.8]]', texto)
+                self.assertIn('"passos":[["teclas",[17],1.45]]', texto)
                 self.assertIn('"etapa":"enviar_entrada","tipo":"OSError","codigo":5', texto)
                 self.assertIn('"evento":"sessao_encerrada"', texto)
             finally:

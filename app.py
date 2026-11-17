@@ -16,7 +16,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from diagnostico import Diagnostico
-from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TECLAS_PICARETA, TEMPLATES
 from versao import VERSAO
 from windows_game import Windows
 
@@ -46,6 +46,8 @@ def carregar_config():
         minutos = dados.get("minutos_partida")
         if type(minutos) in (int, float) and 1 <= minutos <= 60:
             ajustes["minutos_partida"] = minutos
+        if dados.get("tecla_picareta") in ("", *TECLAS_PICARETA):
+            ajustes["tecla_picareta"] = dados["tecla_picareta"]
         return replace(padrao, **ajustes)
     except (OSError, ValueError):
         return padrao
@@ -55,7 +57,8 @@ def salvar_config(config):
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     provisoria = CONFIG.with_suffix(".tmp")
     dados = asdict(config)
-    provisoria.write_text(json.dumps({chave: dados[chave] for chave in CAMPOS}), encoding="utf-8")
+    provisoria.write_text(json.dumps({chave: dados[chave] for chave in (*CAMPOS, "tecla_picareta")}),
+                          encoding="utf-8")
     provisoria.replace(CONFIG)
 
 
@@ -158,8 +161,12 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     elif acao.tipo == "movimento":
                         teclas = [nome for nome, scan in TECLAS.items()
                                   if any(p[0] in ("teclas", "andar_mouse") and scan in p[1] for p in acao.passos)]
-                        texto = (f"Anti-AFK · caminhada enviada ({'/'.join(teclas)}) às {time.strftime('%H:%M:%S')}"
-                                 if teclas else None)
+                        acoes = [f"caminhada ({'/'.join(teclas)})"] if teclas else []
+                        if any(p[0] in ("andar_mouse", "mouse") for p in acao.passos):
+                            acoes.append("câmera")
+                        if any(p[0] == "clique" for p in acao.passos):
+                            acoes.append("picareta")
+                        texto = f"Anti-AFK · {', '.join(acoes)} às {time.strftime('%H:%M:%S')}" if acoes else None
                     else:
                         texto = {
                             "esc": "Esc enviado",
@@ -233,11 +240,12 @@ class Painel:
         self.total = tk.StringVar(janela, "0")
         self.opcoes = {nome: tk.BooleanVar(janela, getattr(self.config, nome)) for nome in CAMPOS[:-1]}
         self.minutos = tk.StringVar(janela, f"{self.config.minutos_partida:g}".replace(".", ","))
+        self.tecla_picareta = tk.StringVar(janela, self.config.tecla_picareta or "Desligada")
 
         janela.title(f"Auto Farm · {VERSAO}")
         janela.configure(bg=BG)
-        janela.minsize(590, 555)
-        janela.geometry("650x580")
+        janela.minsize(590, 577)
+        janela.geometry("650x605")
         janela.protocol("WM_DELETE_WINDOW", self.fechar)
         self.estilo()
         self.montar()
@@ -293,6 +301,9 @@ class Painel:
         ttk.Label(campo, text="Minutos por partida").pack(side="left", padx=(0, 10))
         ttk.Entry(campo, textvariable=self.minutos, width=7).pack(side="left", padx=(0, 8))
         ttk.Label(campo, text="1–60", style="Info.TLabel").pack(side="left")
+        ttk.Label(campo, text="Tecla da picareta").pack(side="left", padx=(20, 8))
+        ttk.Combobox(campo, textvariable=self.tecla_picareta, values=(*TECLAS_PICARETA, "Desligada"),
+                     state="readonly", width=10).pack(side="left")
         comandos = ttk.Frame(painel)
         comandos.pack(fill="x")
         self.botao = ttk.Button(comandos, text="Iniciar", style="Start.TButton", command=self.alternar)
@@ -320,7 +331,8 @@ class Painel:
         minutos = float(self.minutos.get().replace(",", "."))
         if not 1 <= minutos <= 60:
             raise ValueError("Informe um tempo de partida entre 1 e 60 minutos.")
-        return replace(self.config, minutos_partida=minutos,
+        tecla = self.tecla_picareta.get()
+        return replace(self.config, minutos_partida=minutos, tecla_picareta=tecla if tecla in TECLAS_PICARETA else "",
                        **{nome: var.get() for nome, var in self.opcoes.items()})
 
     def alternar(self):
