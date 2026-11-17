@@ -254,13 +254,24 @@ class Detector:
         score = candidato.score if candidato else 0.0
         if score >= 0.8:
             return candidato, score
-        if score >= 0.48:
-            recorte, _, _ = _roi(quadro, (0.46, 0.42, 0.90, 0.69))
+        recorte, _, _ = _roi(quadro, (0.46, 0.42, 0.90, 0.69))
+        if score >= 0.48 or self._faixa_texto_claro(recorte, quadro.shape[0]):
             ampliado = _resize(recorte, 1.5)
             texto = self.ler_contexto(ampliado, "pular_onibus")
             if texto:
                 return texto, score
         return None, score
+
+    @staticmethod
+    def _faixa_texto_claro(recorte, altura):
+        branco = cv2.inRange(recorte, (175, 175, 175), (255, 255, 255))
+        largura = recorte.shape[1]
+        # Aproxima as letras da mesma linha sem juntar linhas vizinhas.
+        ligadas = cv2.morphologyEx(branco, cv2.MORPH_CLOSE,
+                                   np.ones((2, max(5, largura // 24)), np.uint8))
+        contornos, _ = cv2.findContours(ligadas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return any(0.09 * largura <= w <= 0.92 * largura and 0.006 * altura <= h <= 0.055 * altura
+                   and w >= 2 * h for _, _, w, h in map(cv2.boundingRect, contornos))
 
     def _ler_jogar_painel(self, quadro):
         regiao, x0, y0 = _roi(quadro, (0.55, 0.8, 0.98, 0.98))

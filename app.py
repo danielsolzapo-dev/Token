@@ -487,6 +487,14 @@ def verificar_build():
     if fluxo_sem_fila.inicio_partida is not None or fluxo_sem_fila.partidas:
         raise RuntimeError("HUD já visível iniciou uma partida sem nova fila.")
     from PIL import ImageDraw, ImageFont
+    fonte_aviso = ImageFont.truetype(str(Path(os.environ["WINDIR"]) / "Fonts" / "arialbd.ttf"), 25)
+    aviso_texto = Image.new("RGB", (1280, 800), "#224463")
+    ImageDraw.Draw(aviso_texto).text((855, 432), "ESPAÇO PARA PULAR", font=fonte_aviso,
+                                   fill="white", anchor="mm")
+    quadro_aviso = cv2.cvtColor(np.asarray(aviso_texto), cv2.COLOR_RGB2BGR)
+    alvo_texto, _ = detector.aviso_onibus(quadro_aviso)
+    if alvo_texto is None or alvo_texto.metodo != "texto":
+        raise RuntimeError("O aviso do ônibus com outro estilo precisa ser reconhecido pelo texto.")
     modal = Image.new("RGB", (960, 540), "#17263a")
     fonte = ImageFont.truetype(str(Path(os.environ["WINDIR"]) / "Fonts" / "arialbd.ttf"), 34)
     desenho = ImageDraw.Draw(modal)
