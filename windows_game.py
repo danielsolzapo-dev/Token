@@ -3,6 +3,8 @@
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
+from queue import Empty, SimpleQueue
+from threading import Event, Lock, Thread
 import time
 
 import cv2
@@ -12,6 +14,8 @@ from PIL import ImageGrab
 
 F6 = 0x75
 F7 = 0x76
+WM_HOTKEY = 0x0312
+MOD_NOREPEAT = 0x4000
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,10 @@ class Windows:
     def __init__(self, *, relogio=None, esperar=None):
         self.relogio = relogio or time.monotonic
         self.esperar_evento = esperar or (lambda parar, duracao: parar.wait(duracao))
+        self._entrada = Lock()
+        self._eventos_f6 = SimpleQueue()
+        self._encerrar_atalho = Event()
+        self._f6_registrado = self._f6_anterior = False
         self.user = ctypes.WinDLL("user32", use_last_error=True)
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         api = self.user
@@ -62,6 +70,10 @@ class Windows:
         api.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
         api.GetAsyncKeyState.argtypes = [ctypes.c_int]
         api.GetAsyncKeyState.restype = ctypes.c_short
+        api.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        api.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+        api.PeekMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+                                     wintypes.UINT, wintypes.UINT, wintypes.UINT]
         api.GetCursorInfo.argtypes = [ctypes.POINTER(Cursor)]
         api.SetCursorPos.argtypes = [ctypes.c_int, ctypes.c_int]
         api.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
@@ -110,8 +122,37 @@ class Windows:
             return None
         return origem.x, origem.y, origem.x + rect.right, origem.y + rect.bottom
 
-    def f6(self):
-        return bool(self.user.GetAsyncKeyState(F6) & 0x8000)
+    def iniciar_atalho(self):
+        Thread(target=self._receber_atalho, daemon=True).start()
+
+    def fechar_atalho(self):
+        self._encerrar_atalho.set()
+
+    def _receber_atalho(self):
+        if not self.user.RegisterHotKey(None, 1, MOD_NOREPEAT, F6):
+            return
+        self._f6_registrado = True
+        mensagem = wintypes.MSG()
+        try:
+            while not self._encerrar_atalho.is_set():
+                while self.user.PeekMessageW(ctypes.byref(mensagem), None, WM_HOTKEY, WM_HOTKEY, 1):
+                    self._eventos_f6.put(True)
+                self._encerrar_atalho.wait(0.015)
+        finally:
+            self.user.UnregisterHotKey(None, 1)
+            self._f6_registrado = False
+
+    def f6_pressionado(self):
+        if self._f6_registrado:
+            try:
+                self._eventos_f6.get_nowait()
+            except Empty:
+                return False
+            return True
+        pressionado = bool(self.user.GetAsyncKeyState(F6) & 0x8000)
+        novo = pressionado and not self._f6_anterior
+        self._f6_anterior = pressionado
+        return novo
 
     def f7(self):
         return bool(self.user.GetAsyncKeyState(F7) & 0x8000)
@@ -212,6 +253,15 @@ class Windows:
         return True
 
     def executar(self, janela, acao, parar):
+        with self._entrada:
+            if parar.is_set():
+                return False
+            return self._executar(janela, acao, parar)
+
+    def entrada_em_andamento(self):
+        return self._entrada.locked()
+
+    def _executar(self, janela, acao, parar):
         if not self.disponivel(janela, parar):
             return False
         if acao.tipo == "esc":

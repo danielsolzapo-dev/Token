@@ -2,16 +2,16 @@ from dataclasses import replace
 import os
 from pathlib import Path
 from queue import SimpleQueue
-from threading import Event
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from app import Painel, monitorar
+from app import FINALIZANDO_LEITURA, Painel, monitorar
 from logica_autofarm import Acao, Alvo, Config, Detector, Fluxo, TEMPLATES
 from texto_tela import Linha, Reconhecedor, identificar
 from windows_game import Janela, Windows
@@ -592,6 +592,29 @@ class PainelTest(unittest.TestCase):
 
 
 class MonitorTest(unittest.TestCase):
+    def test_pausa_durante_ocr_abandona_quadro_antes_de_decidir(self):
+        detector = TelaSimulada()
+        detector.templates = dict.fromkeys(TEMPLATES)
+        detector.em_partida = lambda _: False
+        parar = Event()
+
+        def ler_onibus(_):
+            parar.set()
+            return None, 0.0
+
+        detector.aviso_onibus = ler_onibus
+        detector.aviso_asa = Mock()
+        fluxo = Fluxo(detector)
+        fluxo.passo = Mock()
+        windows = SimpleNamespace(
+            fortnite_em_foco=lambda: 42, capturar=lambda _: np.zeros((540, 960, 3), dtype=np.uint8),
+            disponivel=lambda *_: True, cursor_visivel=lambda: False, executar=Mock(),
+        )
+        monitorar(windows, fluxo, SimpleQueue(), parar)
+        detector.aviso_asa.assert_not_called()
+        fluxo.passo.assert_not_called()
+        windows.executar.assert_not_called()
+
     def test_cliques_recusados_pelo_windows_nao_consomem_tentativas(self):
         detector = TelaSimulada()
         detector.nome = "jogar"
@@ -620,9 +643,72 @@ class MonitorTest(unittest.TestCase):
         self.assertEqual(fluxo.partidas, 0)
 
 
+class PausaPainelTest(unittest.TestCase):
+    def test_confirma_pausa_quando_entrada_termina_e_impede_reinicio_ate_worker_sair(self):
+        painel = object.__new__(Painel)
+        painel.parar = Event()
+        painel.worker = Mock()
+        painel.windows = Mock()
+        painel.relogio = Mock()
+        painel.botao = Mock()
+        painel.diagnostico = Mock()
+        painel.status, painel.atividade = Mock(), Mock()
+        for variavel in (painel.status, painel.atividade):
+            variavel.set.side_effect = lambda texto, var=variavel: setattr(var.get, "return_value", texto)
+        painel.worker.is_alive.return_value = True
+        painel.windows.entrada_em_andamento.return_value = True
+        painel.alternar("f6")
+        self.assertTrue(painel.parar.is_set())
+        self.assertEqual(painel.status.get(), "Pausando")
+        painel.diagnostico.registrar.assert_called_once_with("pausa_solicitada", origem="f6")
+        painel.windows.entrada_em_andamento.return_value = False
+        painel.atualizar_pausa()
+        self.assertEqual(painel.status.get(), "Pausado")
+        self.assertEqual(painel.atividade.get(), FINALIZANDO_LEITURA)
+        painel.alternar("f6")
+        painel.botao.state.assert_called_once_with(["disabled"])
+        painel.worker.is_alive.return_value = False
+        painel.atualizar_pausa()
+        self.assertIsNone(painel.worker)
+        painel.botao.configure.assert_called_once_with(text="Iniciar")
+        painel.botao.state.assert_called_with(["!disabled"])
+
+
 class WindowsTest(unittest.TestCase):
-    def test_golpe_cancelado_se_cursor_reaparece(self):
+    def criar_windows(self):
         windows = object.__new__(Windows)
+        windows._entrada = Lock()
+        return windows
+
+    def test_pausa_espera_soltar_tecla_e_bloqueia_nova_entrada(self):
+        windows = self.criar_windows()
+        janela = Janela(1, (0, 0, 100, 100))
+        parar, pressionada = Event(), Event()
+        resultado, teclas = [], []
+        windows.disponivel = lambda _, sinal: not sinal.is_set()
+
+        def esperar(*_):
+            pressionada.set()
+            return not parar.wait(2)
+
+        windows._esperar = esperar
+        windows._tecla = lambda scan, soltando=False: teclas.append((scan, soltando))
+        acao = Acao("movimento", passos=(("teclas", (17,), 1.45), ("teclas", (30,), 1.45)))
+        worker = Thread(target=lambda: resultado.append(windows.executar(janela, acao, parar)))
+        worker.start()
+        try:
+            self.assertTrue(pressionada.wait(1))
+            self.assertTrue(windows.entrada_em_andamento())
+        finally:
+            parar.set()
+            worker.join(2)
+        self.assertEqual(resultado, [False])
+        self.assertFalse(windows.entrada_em_andamento())
+        self.assertFalse(windows.executar(janela, acao, parar))
+        self.assertEqual(teclas, [(17, False), (17, True)])
+
+    def test_golpe_cancelado_se_cursor_reaparece(self):
+        windows = self.criar_windows()
         windows.disponivel = lambda *_: True
         windows.cursor_visivel = lambda: True
         with patch.object(Windows, "_clique") as clique:
@@ -633,13 +719,13 @@ class WindowsTest(unittest.TestCase):
 
     def test_geometria_mudou_antes_da_entrada(self):
         janela = Janela(42, (0, 0, 100, 100))
-        windows = object.__new__(Windows)
+        windows = self.criar_windows()
         windows.user = type("Api", (), {"GetForegroundWindow": lambda _: 42})()
         windows._area = lambda _: (0, 0, 200, 200)
         self.assertFalse(windows.executar(janela, Acao("esc"), Event()))
 
     def test_coordenada_fora_da_janela_nao_e_enviada(self):
-        windows = object.__new__(Windows)
+        windows = self.criar_windows()
         windows.disponivel = lambda *_: True
         acao = Acao("clicar", Alvo("jogar", 1, (110, 110, 20, 20), 1))
         self.assertFalse(windows.executar(Janela(42, (0, 0, 100, 100)), acao, Event()))

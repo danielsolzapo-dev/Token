@@ -31,6 +31,8 @@ PAINEL = "#1b2230"
 TEXTO = "#f0f3f9"
 MUTED = "#aab7cb"
 ACENTO = "#afd45e"
+SOLTANDO_CONTROLES = "Soltando os controles da automação…"
+FINALIZANDO_LEITURA = "Controles liberados. Finalizando a leitura da tela…"
 FUNDO_METRICA = "#10141c"
 TEXTO_METRICA = "#ffe600"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
@@ -102,8 +104,12 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     partida = False
                 cursor = windows.cursor_visivel()
                 alvo_onibus, score_onibus = detector.aviso_onibus(quadro)
+                if parar.is_set():
+                    break
                 onibus = bool(alvo_onibus)
                 alvo_asa, score_asa = detector.aviso_asa(quadro) if not onibus else (None, 0.0)
+                if parar.is_set():
+                    break
                 asa_delta = bool(alvo_asa)
                 contagem = fluxo.partidas
                 agora = time.monotonic()
@@ -123,6 +129,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 acao = fluxo.passo(quadro, agora, partida=partida, cursor=cursor,
                                    no_onibus=onibus, hud_visivel=hud_visivel,
                                    asa_delta=asa_delta, espectando=bool(bloqueio_hud))
+                if parar.is_set():
+                    break
                 leituras = (True, hud_visivel, partida, cursor, onibus, asa_delta, fluxo.motivo_anti_afk)
                 if diagnostico and (leituras != leituras_anteriores or agora >= proximo_registro):
                     diagnostico.registrar("leitura", foco=True, hud=hud_visivel, partida=partida,
@@ -229,7 +237,6 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
         if diagnostico:
             diagnostico.registrar("sessao_encerrada", pausada=parar.is_set())
         fluxo.pausar()
-        eventos.put(("fim", parar))
 
 
 def detectar_arquivo(caminho):
@@ -249,7 +256,7 @@ class Painel:
         self.eventos_atualizacao = SimpleQueue()
         self.release_disponivel = self.atualizacao_preparada = self.operacao_atualizacao = None
         self.worker = self.parar = None
-        self.f6_anterior = self.fechando = False
+        self.fechando = False
         self.f7_anterior = False
         self.status = tk.StringVar(janela, "Pausado")
         self.atividade = tk.StringVar(janela, "Clique em Iniciar no lobby ou já na partida.")
@@ -486,12 +493,16 @@ class Painel:
         return replace(self.config, minutos_partida=minutos,
                        **{nome: var.get() for nome, var in self.opcoes.items()})
 
-    def alternar(self):
-        if self.worker is not None and self.worker.is_alive():
-            self.relogio.pausar(time.monotonic())
-            self.parar.set()
-            self.botao.state(["disabled"])
-            self.status.set("Pausando")
+    def alternar(self, origem="botao"):
+        if self.worker is not None:
+            if not self.parar.is_set():
+                self.parar.set()
+                self.relogio.pausar(time.monotonic())
+                self.botao.state(["disabled"])
+                self.atividade.set(SOLTANDO_CONTROLES)
+                self.atualizar_pausa()
+                if self.diagnostico:
+                    self.diagnostico.registrar("pausa_solicitada", origem=origem)
             return
         try:
             config = self.ler_opcoes()
@@ -518,6 +529,26 @@ class Painel:
         self.parar = Event()
         self.worker = Thread(target=monitorar, args=(self.windows, self.fluxo, self.eventos, self.parar, self.diagnostico))
         self.worker.start()
+
+    def atualizar_pausa(self):
+        if self.worker is None:
+            return
+        if not self.worker.is_alive():
+            self.worker = None
+            self.relogio.pausar(time.monotonic())
+            self.status.set("Pausado")
+            self.botao.configure(text="Iniciar")
+            self.botao.state(["!disabled"])
+            if self.atividade.get() in (SOLTANDO_CONTROLES, FINALIZANDO_LEITURA):
+                self.atividade.set("Automação pausada. Use Iniciar ou F6 para retomar.")
+        elif self.parar.is_set():
+            if self.windows.entrada_em_andamento():
+                self.status.set("Pausando")
+            else:
+                if self.status.get() != "Pausado":
+                    self.status.set("Pausado")
+                    if self.atividade.get() == SOLTANDO_CONTROLES:
+                        self.atividade.set(FINALIZANDO_LEITURA)
 
     def testar(self):
         caminho = filedialog.askopenfilename(parent=self.janela, title="Selecionar uma captura",
@@ -569,10 +600,8 @@ class Painel:
 
     def atualizar(self):
         self._processar_atualizacao()
-        f6 = self.windows.f6()
-        if not self.fechando and f6 and not self.f6_anterior and "disabled" not in self.botao.state():
-            self.alternar()
-        self.f6_anterior = f6
+        if self.windows.f6_pressionado() and not self.fechando and "disabled" not in self.botao.state():
+            self.alternar("f6")
         if self.diagnostico:
             f7 = self.windows.f7()
             if f7 and not self.f7_anterior and self.worker is not None and self.worker.is_alive():
@@ -590,13 +619,9 @@ class Painel:
                 self.total.set(str(valor))
             elif evento == "prazo_saida":
                 self.relogio.prazo_saida = valor
-            elif evento in ("acao", "erro"):
+            elif evento == "erro" or (evento == "acao" and self.parar is not None and not self.parar.is_set()):
                 self.atividade.set(valor)
-            elif evento == "fim" and valor is self.parar:
-                self.relogio.pausar(time.monotonic())
-                self.status.set("Pausado")
-                self.botao.configure(text="Iniciar")
-                self.botao.state(["!disabled"])
+        self.atualizar_pausa()
         saida, farmando = self.relogio.valores(time.monotonic())
         if saida != self.proxima_saida.get():
             self.proxima_saida.set(saida)
@@ -760,8 +785,10 @@ def main():
     if diagnostico is None:
         painel.atividade.set("O diagnóstico local não pôde ser criado.")
     try:
+        windows.iniciar_atalho()
         janela.mainloop()
     finally:
+        windows.fechar_atalho()
         if diagnostico:
             diagnostico.fechar()
 
