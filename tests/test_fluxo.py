@@ -22,6 +22,10 @@ class TelaSimulada:
     config = Config(minutos_partida=0.1, timeout_lobby=8, anti_afk=False)
     nome = None
     dialogo_ambiguo = False
+    social = False
+
+    def painel_social_lobby(self, quadro):
+        return self.social
 
     def aviso_onibus(self, quadro):
         return None, 0.0
@@ -89,6 +93,26 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(0.6, partida=True, cursor=True).passos, (("teclas", (17,), 1.45),))
         self.assertIsNone(self.fluxo.inicio_partida)
         self.assertEqual(self.fluxo.partidas, 0)
+
+    def test_inicio_manual_tolera_perda_breve_do_hud(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
+        self.assertIsNone(self.passo(0, partida=True))
+        self.assertIsNone(self.passo(0.2, partida=True))
+        self.assertEqual(self.passo(0.4, partida=True).tipo, "movimento")
+        self.assertEqual(self.passo(3, partida=False).tipo, "movimento")
+        self.assertIsNone(self.passo(6, partida=False))
+        self.assertIsNone(self.fluxo.prazo_saida)
+
+    def test_fecha_painel_social_do_lobby_antes_de_clicar_jogar(self):
+        self.detector.social = True
+        for instante in (0, 2, 4):
+            acao = self.passo(instante, "lobby_jogar")
+            self.assertEqual((acao.tipo, acao.alvo.nome), ("esc", "lobby_fechar_social"))
+        self.assertEqual(self.passo(6, "lobby_jogar").tipo, "painel_social_nao_fechou")
+        self.assertIsNone(self.passo(8, "lobby_jogar"))
+        self.detector.social = False
+        self.assertIsNone(self.passo(9, "lobby_jogar"))
+        self.assertEqual(self.passo(9.2, "lobby_jogar").alvo.nome, "lobby_jogar")
 
     def test_anti_afk_aguarda_transicao_apos_clique_de_fila(self):
         self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
@@ -776,6 +800,37 @@ class PainelTest(unittest.TestCase):
 
 
 class MonitorTest(unittest.TestCase):
+    def test_clique_ignorado_em_fundo_aguarda_foco_e_tenta_de_novo(self):
+        detector = TelaSimulada()
+        detector.templates = dict.fromkeys(TEMPLATES)
+        detector.config = replace(detector.config, segundo_plano=True)
+        detector.nome = "lobby_jogar"
+        detector.em_partida = lambda _: False
+        fluxo = Fluxo(detector)
+        parar = Mock(wraps=Event())
+        eventos = SimpleQueue()
+        area = (0, 0, 960, 540)
+        fundo, foco = Janela(42, area, pid_fundo=15), Janela(42, area)
+        windows = Mock()
+        windows.localizar_fortnite.side_effect = iter([fundo] * 8 + [foco] * 2)
+        windows.capturar.return_value = np.zeros((540, 960, 3), dtype=np.uint8)
+
+        def executar(janela, acao, sinal):
+            if janela == foco:
+                sinal.set()
+            return True
+
+        windows.executar.side_effect = executar
+        instantes = iter(range(0, 40, 2))
+        with patch("app.time", SimpleNamespace(monotonic=lambda: next(instantes))):
+            monitorar(windows, fluxo, eventos, parar)
+        chamadas = [(janela, acao.tentativa) for janela, acao, _ in (
+            chamada.args for chamada in windows.executar.call_args_list)]
+        self.assertEqual(chamadas, [(fundo, 0), (fundo, 1), (fundo, 2), (foco, 0)])
+        self.assertEqual(windows.capturar.call_count, 7)
+        self.assertIn(("estado", "Fortnite sem resposta · volte ao jogo"),
+                      [eventos.get_nowait() for _ in range(eventos.qsize())])
+
     def test_descida_em_segundo_plano_move_antes_do_hud(self):
         detector = TelaSimulada()
         detector.templates = dict.fromkeys(TEMPLATES)

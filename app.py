@@ -21,7 +21,7 @@ from PIL import Image, ImageGrab, ImageTk
 from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao,
                          criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
-from logica_autofarm import ACOES_AEREAS, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from logica_autofarm import ACOES_AEREAS, BOTOES_LOBBY, Config, Detector, Fluxo, TECLAS, TEMPLATES
 from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, NORTE, regiao_por_horario
 from relogio_painel import RelogioPainel
@@ -106,6 +106,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     proximo_esquadrao = 0.0
     candidato_esquadrao = contagem_esquadrao = None
     quadros_esquadrao = 0
+    aguardando_foco = False
     etapa = "iniciar"
     acao = None
     try:
@@ -123,11 +124,19 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
             segundo_plano = fluxo.config.segundo_plano
             janela = windows.localizar_fortnite() if segundo_plano else windows.fortnite_em_foco()
             em_fundo = bool(segundo_plano and janela and janela.pid_fundo)
+            if aguardando_foco and (em_fundo or not janela):
+                parar.wait(0.3)
+                continue
             quadro = None
             if janela and windows.disponivel(janela, parar):
                 quadro = windows.capturar(janela, parar) if em_fundo else windows.capturar(janela)
             pronto = quadro is not None and windows.disponivel(janela, parar)
             if pronto:
+                if aguardando_foco:
+                    fluxo.rearmar_fila()
+                    aguardando_foco = False
+                    if diagnostico:
+                        diagnostico.registrar("controle_retomado_em_primeiro_plano")
                 etapa = "detectar"
                 hud_visivel = partida = detector.em_partida(quadro)
                 bloqueio_hud = detector.procurar(quadro, ("espectador", "reinicializando"), 0.8)
@@ -220,6 +229,15 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     estado = f"Em partida · {contagem_esquadrao} no HUD do esquadrão"
                 if em_fundo:
                     estado += " · Segundo plano"
+                falha_lobby = acao and (
+                    acao.tipo == "painel_social_nao_fechou"
+                    or (acao.tipo == "clique_ignorado" and acao.alvo.nome in BOTOES_LOBBY)
+                )
+                if em_fundo and falha_lobby:
+                    aguardando_foco = True
+                    estado = "Fortnite sem resposta · volte ao jogo"
+                    if diagnostico:
+                        diagnostico.registrar("controle_aguardando_primeiro_plano", motivo=acao.tipo)
                 tem_entrada = acao is not None and (bool(acao.passos) or acao.tipo in ("clicar", "esc", "apontar"))
                 if diagnostico and acao and (tem_entrada or acao.tipo != ultimo_tipo):
                     ordem += 1
@@ -236,7 +254,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 if diagnostico and tem_entrada:
                     motivo = None if executada else windows.motivo_interrupcao(janela, parar)
                     diagnostico.registrar("resultado_entrada", id=ordem,
-                                          resultado="enviada" if executada else "interrompida", motivo=motivo,
+                                          resultado=("mensagem_enfileirada" if em_fundo else "enviada")
+                                          if executada else "interrompida", motivo=motivo,
                                           metodo="mensagem_janela" if em_fundo else "send_input")
                 if diagnostico and acao and acao.tipo in ("regiao_falhou", "regiao_ok"):
                     if acao.tipo == "regiao_falhou":
@@ -284,13 +303,15 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                         texto = f"Anti-AFK · {', '.join(acoes)} às {time.strftime('%H:%M:%S')}" if acoes else None
                     else:
                         texto = {
-                            "esc": "Esc enviado",
+                            "esc": ("Fechando o painel Social do lobby."
+                                    if acao.alvo and acao.alvo.nome == "lobby_fechar_social" else "Esc enviado"),
                             "saltar_onibus": "Salto do ônibus enviado com Espaço.",
                             "fechar_asa": "Espaço enviado após confirmar Entrar em queda livre.",
                             "movimento_menu": "Anti-AFK aguardando fechar o menu de saída.",
                             "clique_confirmado": "Botão saiu da tela",
                             "resgate_confirmado": "Recompensa resgatada.",
                             "clique_ignorado": "Botão continua visível após três tentativas",
+                            "painel_social_nao_fechou": "O painel Social continua aberto. Feche-o para voltar ao lobby.",
                             "menu_nao_encontrado": "Menu de saída não encontrado. Tentando de novo em instantes.",
                             "lobby_nao_encontrado": "Lobby não encontrado. Confira se o jogo pede confirmação.",
                             "aguardando_fila": "Aguardando confirmação da fila ou do início da partida",

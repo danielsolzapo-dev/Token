@@ -300,13 +300,8 @@ class Detector:
     def tela_regiao(self, quadro):
         altura, largura = quadro.shape[:2]
         engrenagem = self._engrenagem_horizontal(quadro)
-        if engrenagem:
-            menu = (max(0, 1 - 0.25 * altura / largura), 0.018,
-                    1 - 0.151 * altura / largura, 0.106)
-            for nome in ("menu_aba", "menu_aba_sel"):
-                controle = self.buscar_template(quadro, nome, 0.81, limites=menu)
-                if controle and controle.score >= 0.81:
-                    return TelaRegiao(social=True, engrenagem=engrenagem.caixa)
+        if engrenagem and self._menu_do_painel_social(quadro):
+            return TelaRegiao(social=True, engrenagem=engrenagem.caixa)
         leitor = self._carregar_leitor()
         linhas = leitor.linhas(quadro)
         tela = ler_tela_regiao(linhas, largura, altura)
@@ -336,6 +331,19 @@ class Detector:
                    1 - 0.263 * altura / largura, 0.106)
         alvo = self.buscar_template(quadro, "engrenagem_menu_lobby", 0.87, limites=limites)
         return alvo if alvo and alvo.score >= 0.87 else None
+
+    def _menu_do_painel_social(self, quadro):
+        altura, largura = quadro.shape[:2]
+        limites = (max(0, 1 - 0.25 * altura / largura), 0.018,
+                   1 - 0.151 * altura / largura, 0.106)
+        for nome in ("menu_aba", "menu_aba_sel"):
+            alvo = self.buscar_template(quadro, nome, 0.81, limites=limites)
+            if alvo and alvo.score >= 0.81:
+                return True
+        return False
+
+    def painel_social_lobby(self, quadro):
+        return bool(self._engrenagem_horizontal(quadro) and self._menu_do_painel_social(quadro))
 
     def perfil_lobby(self, quadro):
         """Localiza a entrada do menu somente no cabeçalho Jogar reconhecido."""
@@ -573,6 +581,7 @@ class Fluxo:
         self.inicio_partida = None
         self._proxima_acao = 0.0
         self._prazo_lobby = None
+        self._tentativas_fechar_social = 0
         self._prazo_menu = None
         self._repetir_saida_em = 0.0
         self._tentativas_saida_sem_hud = 0
@@ -662,6 +671,9 @@ class Fluxo:
             self._proxima_acao = 0.0
             self.pausar()
         self._fila_bloqueada = False
+        self._tentativas_fechar_social = 0
+        if self._bloqueado in BOTOES_FILA:
+            self._bloqueado = None
         return recuperando
 
     def _procurar(self, quadro, *nomes):
@@ -969,6 +981,18 @@ class Fluxo:
             self.inicio_partida = None
             self._sem_leitura_desde = None
             self._aviso_leitura = False
+            if self.detector.painel_social_lobby(quadro):
+                self.confirmacao.limpar()
+                self.motivo_anti_afk = "fechando_painel_social"
+                if self._tentativas_fechar_social >= 3:
+                    if self._tentativas_fechar_social == 3:
+                        self._tentativas_fechar_social += 1
+                        return Acao("painel_social_nao_fechou")
+                    return None
+                self._tentativas_fechar_social += 1
+                self._proxima_acao = agora + 1.5
+                return Acao("esc", replace(alvo, nome="lobby_fechar_social"))
+            self._tentativas_fechar_social = 0
             acao = self._clicar_e_verificar(alvo, quadro)
             if acao and self.config.regiao_auto:
                 preferida = regiao_por_horario(self.config.regiao_manha, self.config.regiao_noite)
@@ -977,6 +1001,7 @@ class Fluxo:
                     self.motivo_anti_afk = "ajustando_regiao"
                     return self._acao_regiao(ordem, preferida)
             return acao
+        self._tentativas_fechar_social = 0
         if self._prazo_lobby is not None or not partida:
             alvo = self._procurar(quadro, "aba_jogar")
             if alvo:
@@ -1049,6 +1074,8 @@ class Fluxo:
                 (self.inicio_partida is None and agora - self._inicio_hud_novo < 0.35)):
             self.motivo_anti_afk = "confirmando_hud"
             return None
+        if partida and not cursor:
+            self._ultimo_hud_em_partida = agora
         self.motivo_anti_afk = "movimento_planejado"
         transicao_aerea = self.embarque.em_transicao(agora)
         camera_livre = not cursor and not transicao_aerea
