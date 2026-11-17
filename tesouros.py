@@ -139,10 +139,11 @@ def monitorar_tesouros(windows, fluxo, eventos, parar, diagnostico=None):
         try:
             if detector is None:
                 detector = DetectorTesouros()
-            janela = windows.fortnite_em_foco()
+            janela = windows.localizar_fortnite() if config.segundo_plano else windows.fortnite_em_foco()
             if janela and windows.disponivel(janela, parar):
-                quadro = windows.capturar(janela)
-                if windows.disponivel(janela, parar):
+                em_fundo = config.segundo_plano and janela.pid_fundo
+                quadro = windows.capturar(janela, parar) if em_fundo else windows.capturar(janela)
+                if quadro is not None and windows.disponivel(janela, parar):
                     nome = detector.reconhecer(quadro)
                     if not parar.is_set() and avisos.novo(nome, time.monotonic()):
                         eventos.put(("tesouro_webhook", (config.webhook_url, nome, quadro, parar)))

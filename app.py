@@ -36,7 +36,7 @@ FINALIZANDO_LEITURA = "Controles liberados. Finalizando a leitura da tela…"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
-          "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto")
+          "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto", "segundo_plano")
 CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite", "aparencia")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
@@ -112,6 +112,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
         if diagnostico:
             diagnostico.registrar("sessao_iniciada", versao=VERSAO, anti_afk=fluxo.config.anti_afk,
                                   saida_por_tempo=fluxo.config.sair_por_tempo,
+                                  segundo_plano=fluxo.config.segundo_plano,
                                   minutos_partida=fluxo.config.minutos_partida)
         detector = fluxo.detector
         if faltando := TEMPLATES.keys() - detector.templates.keys():
@@ -119,16 +120,23 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
         while not parar.is_set():
             acao = None
             etapa = "capturar"
-            janela = windows.fortnite_em_foco()
-            quadro = windows.capturar(janela) if janela else None
-            pronto = janela is not None and windows.disponivel(janela, parar)
+            segundo_plano = fluxo.config.segundo_plano
+            janela = windows.localizar_fortnite() if segundo_plano else windows.fortnite_em_foco()
+            em_fundo = bool(segundo_plano and janela and janela.pid_fundo)
+            quadro = None
+            if janela and windows.disponivel(janela, parar):
+                quadro = windows.capturar(janela, parar) if em_fundo else windows.capturar(janela)
+            pronto = quadro is not None and windows.disponivel(janela, parar)
             if pronto:
                 etapa = "detectar"
                 hud_visivel = partida = detector.em_partida(quadro)
                 bloqueio_hud = detector.procurar(quadro, ("espectador", "reinicializando"), 0.8)
                 if bloqueio_hud:
                     partida = False
-                cursor = windows.cursor_visivel()
+                cursor = windows.cursor_visivel() if not em_fundo else (
+                    fluxo.navegando_menu or (not partida and not bloqueio_hud)
+                    or bool(detector.procurar(quadro, ("menu_aba", "inventario")))
+                )
                 lendo_menu = cursor and fluxo.navegando_menu
                 alvo_onibus, score_onibus = (None, 0.0) if lendo_menu else detector.aviso_onibus(quadro)
                 if parar.is_set():
@@ -138,6 +146,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 if parar.is_set():
                     break
                 asa_delta = bool(alvo_asa)
+                if em_fundo and (onibus or asa_delta):
+                    cursor = False
                 contagem = fluxo.partidas
                 agora = time.monotonic()
                 if not partida or onibus or asa_delta or lendo_menu:
@@ -177,9 +187,10 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                                   configuracoes=dados[2], pareamento=dados[3], subregiao=dados[4],
                                                   foco_seletor=dados[5], seta_esquerda=dados[6],
                                                   seta_direita=dados[7], aplicar=dados[8], dialogo_alteracoes=dados[9])
-                leituras = (True, hud_visivel, partida, cursor, onibus, asa_delta, fluxo.motivo_anti_afk)
+                leituras = (True, em_fundo, hud_visivel, partida, cursor, onibus, asa_delta, fluxo.motivo_anti_afk)
                 if diagnostico and (leituras != leituras_anteriores or agora >= proximo_registro):
-                    diagnostico.registrar("leitura", foco=True, hud=hud_visivel, partida=partida,
+                    diagnostico.registrar("leitura", foco=not em_fundo, segundo_plano=em_fundo,
+                                          hud=hud_visivel, partida=partida,
                                           cursor=cursor, onibus=onibus, asa_delta=asa_delta,
                                           anti_afk=fluxo.motivo_anti_afk,
                                           bloqueio_hud=bloqueio_hud.nome if bloqueio_hud else None,
@@ -205,6 +216,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     estado = f"Ajustando região · {fluxo.regiao.alvo}" if fluxo.regiao.alvo else "Voltando ao lobby"
                 elif partida and contagem_esquadrao:
                     estado = f"Em partida · {contagem_esquadrao} no HUD do esquadrão"
+                if em_fundo:
+                    estado += " · Segundo plano"
                 tem_entrada = acao is not None and (bool(acao.passos) or acao.tipo in ("clicar", "esc", "apontar"))
                 if diagnostico and acao and (tem_entrada or acao.tipo != ultimo_tipo):
                     ordem += 1
@@ -221,7 +234,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 if diagnostico and tem_entrada:
                     motivo = None if executada else windows.motivo_interrupcao(janela, parar)
                     diagnostico.registrar("resultado_entrada", id=ordem,
-                                          resultado="enviada" if executada else "interrompida", motivo=motivo)
+                                          resultado="enviada" if executada else "interrompida", motivo=motivo,
+                                          metodo="mensagem_janela" if em_fundo else "send_input")
                 if diagnostico and acao and acao.tipo in ("regiao_falhou", "regiao_ok"):
                     if acao.tipo == "regiao_falhou":
                         salvar_falha_regiao(captura_regiao, diagnostico)
@@ -291,16 +305,25 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 elif acao:
                     fluxo.pausar()
                     if not parar.is_set():
-                        eventos.put(("acao", "Ação interrompida. Confira a janela e o foco do Fortnite."))
+                        texto = ("Comando interrompido em segundo plano."
+                                 if em_fundo else "Ação interrompida. Confira a janela e o foco do Fortnite.")
+                        eventos.put(("acao", texto))
             else:
                 fluxo.pausar()
                 candidato_esquadrao = contagem_esquadrao = None
                 quadros_esquadrao = 0
                 estado = "Aguardando o Fortnite em primeiro plano"
-                if diagnostico and leituras_anteriores != (False,):
-                    motivo = windows.motivo_interrupcao(janela, parar) if janela else "fortnite_sem_foco"
-                    diagnostico.registrar("leitura", foco=False, anti_afk=motivo)
-                    leituras_anteriores = (False,)
+                if segundo_plano:
+                    estado = ("Captura da janela indisponível" if janela else
+                              "Aguardando o Fortnite com a janela restaurada")
+                motivo = ("captura_indisponivel" if em_fundo and quadro is None else
+                          windows.motivo_interrupcao(janela, parar) if janela else
+                          "fortnite_indisponivel" if segundo_plano else "fortnite_sem_foco")
+                erro_captura = windows.erro_captura if em_fundo else None
+                if diagnostico and leituras_anteriores != (False, motivo, erro_captura):
+                    diagnostico.registrar("leitura", foco=False, segundo_plano=em_fundo,
+                                          anti_afk=motivo, erro_captura=erro_captura)
+                    leituras_anteriores = (False, motivo, erro_captura)
             if estado != estado_anterior:
                 eventos.put(("estado", estado))
                 estado_anterior = estado
@@ -315,6 +338,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
         if diagnostico:
             diagnostico.registrar("sessao_encerrada", pausada=parar.is_set())
         parar.set()
+        if fluxo.config.segundo_plano:
+            windows.fechar_captura_fundo()
         fluxo.pausar()
 
 
@@ -539,6 +564,7 @@ class Painel:
             ("anti_afk", "Ativar movimento anti-AFK"),
             ("rotina_aerea", "Saltar e fechar a asa-delta com Espaço"),
             ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
+            ("segundo_plano", "Executar em segundo plano (experimental)"),
         ):
             ttk.Checkbutton(automacao, text=texto, variable=self.opcoes[nome], style=self.tema.switch).pack(fill="x")
         ttk.Frame(automacao, style="Separador.TFrame").pack(fill="x", pady=6)
@@ -876,7 +902,8 @@ class Painel:
             return
         self.config = config
         self._salvar_preferencias()
-        self.atividade.set("Coloque o Fortnite em primeiro plano.")
+        self.atividade.set("Deixe a janela do Fortnite restaurada." if config.segundo_plano else
+                           "Coloque o Fortnite em primeiro plano.")
         self.relogio.prazo_saida = self.fluxo.prazo_saida if self.fluxo else None
         self._proximo_relogio = 0.0
         self.relogio.iniciar(time.monotonic())
@@ -1071,6 +1098,10 @@ class Painel:
 
 
 def verificar_build():
+    from windows_capture import WindowsCapture
+
+    if not callable(WindowsCapture):
+        raise RuntimeError("Captura de janela ausente no pacote.")
     detector = Detector()
     DetectorTesouros()
     if faltando := TEMPLATES.keys() - detector.templates.keys():

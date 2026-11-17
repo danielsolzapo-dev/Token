@@ -875,6 +875,43 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual([(ev.dados.tecla.scan, ev.dados.tecla.flags) for ev in enviados],
                          [(0x4D, 9), (0x4D, 11)])
 
+    def test_clique_de_fundo_usa_coordenadas_cliente_sem_mover_cursor_real(self):
+        windows = self.criar_windows()
+        windows._ponto_fundo = None
+        windows.user = Mock()
+        windows._pid = lambda hwnd: 15 if hwnd == 42 else 0
+        windows.disponivel = lambda *_: True
+        windows._esperar = lambda *_: True
+        janela = Janela(42, (50, 70, 150, 170), pid_fundo=15)
+        acao = Acao("clicar", Alvo("jogar", 1, (20, 30, 20, 20), 1))
+        self.assertTrue(windows.executar(janela, acao, Event()))
+        self.assertEqual([chamada.args for chamada in windows.user.PostMessageW.call_args_list],
+                         [(42, 0x200, 0, 30 | (40 << 16)),
+                          (42, 0x201, 1, 30 | (40 << 16)),
+                          (42, 0x202, 0, 30 | (40 << 16))])
+        windows.user.SetCursorPos.assert_not_called()
+        windows.user.SendInput.assert_not_called()
+
+    def test_pausa_soltar_tecla_direcionada_a_janela_em_segundo_plano(self):
+        windows = self.criar_windows()
+        windows.user = Mock()
+        windows.user.MapVirtualKeyW.return_value = 0x27
+        windows._pid = lambda _: 15
+        windows.disponivel = lambda _, sinal: not sinal.is_set()
+        janela = Janela(42, (0, 0, 100, 100), pid_fundo=15)
+        parar = Event()
+
+        def esperar(_, sinal, duracao):
+            sinal.set()
+            return False
+
+        windows._esperar = esperar
+        acao = Acao("apontar_regiao", passos=(("teclas", (0xE04D,), 0.1),))
+        self.assertFalse(windows.executar(janela, acao, parar))
+        self.assertEqual([chamada.args for chamada in windows.user.PostMessageW.call_args_list],
+                         [(42, 0x100, 0x27, 0x014D0001), (42, 0x101, 0x27, 0xC14D0001)])
+        windows.user.SendInput.assert_not_called()
+
     def test_pausa_espera_soltar_tecla_e_bloqueia_nova_entrada(self):
         windows = self.criar_windows()
         janela = Janela(1, (0, 0, 100, 100))

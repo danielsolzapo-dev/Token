@@ -33,6 +33,7 @@ def reduzir_prioridade_thread():
 class Janela:
     hwnd: int
     area: tuple[int, int, int, int]
+    pid_fundo: int = 0
 
 
 class Mouse(ctypes.Structure):
@@ -62,6 +63,39 @@ class Cursor(ctypes.Structure):
                 ("cursor", wintypes.HANDLE), ("ponto", wintypes.POINT)]
 
 
+class CapturaJanela:
+    def __init__(self, janela):
+        from windows_capture import WindowsCapture
+
+        self.janela = janela
+        self.quadro = None
+        self._proximo_quadro = 0.0
+        captura = WindowsCapture(window_hwnd=janela.hwnd, cursor_capture=False)
+
+        @captura.event
+        def on_frame_arrived(frame, _):
+            agora = time.monotonic()
+            if agora >= self._proximo_quadro:
+                self.quadro = (agora, frame.frame_buffer.copy())
+                self._proximo_quadro = agora + 0.08
+
+        @captura.event
+        def on_closed():
+            self.quadro = None
+
+        self.controle = captura.start_free_threaded()
+
+    def ler(self):
+        ultimo = self.quadro
+        if ultimo and time.monotonic() - ultimo[0] <= 1.5:
+            return ultimo[1]
+        return None
+
+    def fechar(self):
+        if not self.controle.is_finished():
+            self.controle.stop()
+
+
 class Windows:
     def __init__(self, *, relogio=None, esperar=None):
         self.relogio = relogio or time.monotonic
@@ -70,12 +104,31 @@ class Windows:
         self._eventos_f6 = SimpleQueue()
         self._encerrar_atalho = Event()
         self._f6_registrado = self._f6_anterior = False
+        self._fortnite_localizado = (0, 0)
+        self._proxima_busca_fortnite = 0
+        self._ponto_fundo = None
+        self._trava_captura = Lock()
+        self._captura_fundo = None
+        self._repetir_captura_em = 0.0
+        self.erro_captura = None
+        self._callback_enumerar = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self.user = ctypes.WinDLL("user32", use_last_error=True)
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.dwm = ctypes.WinDLL("dwmapi", use_last_error=True)
+        self.dwm.DwmGetWindowAttribute.argtypes = [
+            wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ]
         api = self.user
         api.SetProcessDpiAwarenessContext.argtypes = [wintypes.HANDLE]
         api.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
         api.GetForegroundWindow.restype = wintypes.HWND
+        api.EnumWindows.argtypes = [self._callback_enumerar, wintypes.LPARAM]
+        api.IsWindowVisible.argtypes = [wintypes.HWND]
+        api.IsIconic.argtypes = [wintypes.HWND]
+        api.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        api.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+        api.MapVirtualKeyW.restype = wintypes.UINT
+        api.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         api.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
         api.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         api.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
@@ -106,24 +159,69 @@ class Windows:
 
     def fortnite_em_foco(self):
         hwnd = self.user.GetForegroundWindow()
-        if not hwnd:
-            return None
+        if hwnd and self._pid_fortnite(hwnd):
+            area = self._area(hwnd)
+            if area:
+                return Janela(hwnd, area)
+        return None
+
+    def _pid(self, hwnd):
         pid = wintypes.DWORD()
         self.user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        handle = self.kernel.OpenProcess(0x1000, False, pid.value)
+        return pid.value
+
+    def _pid_fortnite(self, hwnd):
+        pid = self._pid(hwnd)
+        handle = self.kernel.OpenProcess(0x1000, False, pid)
         if not handle:
-            return None
+            return 0
         nome = ctypes.create_unicode_buffer(1024)
         comprimento = wintypes.DWORD(len(nome))
         try:
             if not self.kernel.QueryFullProcessImageNameW(handle, 0, nome, ctypes.byref(comprimento)):
-                return None
+                return 0
             if nome.value.rsplit("\\", 1)[-1].casefold() != "fortniteclient-win64-shipping.exe":
-                return None
+                return 0
         finally:
             self.kernel.CloseHandle(handle)
-        area = self._area(hwnd)
-        return Janela(hwnd, area) if area else None
+        return pid
+
+    def localizar_fortnite(self):
+        primeiro_plano = self.fortnite_em_foco()
+        if primeiro_plano:
+            self._fortnite_localizado = (primeiro_plano.hwnd, self._pid(primeiro_plano.hwnd))
+            self.fechar_captura_fundo()
+            return primeiro_plano
+        hwnd, pid = self._fortnite_localizado
+        if not (pid and self._pid(hwnd) == pid and self.user.IsWindowVisible(hwnd)):
+            agora = self.relogio()
+            if agora < self._proxima_busca_fortnite:
+                return None
+            self._proxima_busca_fortnite = agora + 1
+            hwnd, pid = self._buscar_janela_fortnite()
+            self._fortnite_localizado = (hwnd, pid)
+        if pid and not self.user.IsIconic(hwnd):
+            area = self._area(hwnd)
+            if area:
+                return Janela(hwnd, area, pid)
+        self.fechar_captura_fundo()
+        return None
+
+    def _buscar_janela_fortnite(self):
+        encontrado = (0, 0)
+        titulo = ctypes.create_unicode_buffer(64)
+
+        @self._callback_enumerar
+        def examinar(hwnd, _):
+            nonlocal encontrado
+            if self.user.IsWindowVisible(hwnd) and self.user.GetWindowTextW(hwnd, titulo, len(titulo)):
+                if titulo.value.strip().casefold() == "fortnite" and (pid := self._pid_fortnite(hwnd)):
+                    encontrado = hwnd, pid
+                    return False
+            return True
+
+        self.user.EnumWindows(examinar, 0)
+        return encontrado
 
     def _area(self, hwnd):
         rect, origem = wintypes.RECT(), wintypes.POINT()
@@ -172,23 +270,79 @@ class Windows:
         cursor = Cursor(tamanho=ctypes.sizeof(Cursor))
         return bool(self.user.GetCursorInfo(ctypes.byref(cursor)) and cursor.flags & 1)
 
-    @staticmethod
-    def capturar(janela):
-        imagem = ImageGrab.grab(bbox=janela.area, all_screens=True).convert("RGB")
-        return cv2.cvtColor(np.asarray(imagem), cv2.COLOR_RGB2BGR)
+    def capturar(self, janela, parar=None):
+        if not janela.pid_fundo:
+            imagem = ImageGrab.grab(bbox=janela.area, all_screens=True)
+            return cv2.cvtColor(np.asarray(imagem.convert("RGB")), cv2.COLOR_RGB2BGR)
+        with self._trava_captura:
+            if (parar is not None and parar.is_set()) or not self._modo_disponivel(janela):
+                return None
+            captura = self._captura_fundo
+            # Mover a janela preserva a sessão. Trocar de HWND exige outra captura.
+            if captura and (captura.janela.hwnd != janela.hwnd or captura.janela.pid_fundo != janela.pid_fundo
+                            or captura.controle.is_finished()):
+                self._fechar_captura()
+                captura = None
+            if captura is None:
+                agora = self.relogio()
+                if agora < self._repetir_captura_em:
+                    return None
+                self._repetir_captura_em = agora + 2
+                try:
+                    captura = self._captura_fundo = CapturaJanela(janela)
+                except Exception as erro:  # A extensão nativa também usa Exception diretamente.
+                    self.erro_captura = str(erro)
+                    return None
+                self.erro_captura = None
+            imagem = captura.ler()
+        if imagem is None:
+            return None
+        altura, largura = imagem.shape[:2]
+        esquerda, topo, direita, base = janela.area
+        if (largura, altura) == (direita - esquerda, base - topo):
+            cliente = imagem
+        else:
+            rect = wintypes.RECT()
+            if self.dwm.DwmGetWindowAttribute(janela.hwnd, 9, ctypes.byref(rect), ctypes.sizeof(rect)):
+                return None
+            x1, y1, x2, y2 = esquerda - rect.left, topo - rect.top, direita - rect.left, base - rect.top
+            if not (0 <= x1 < x2 <= largura and 0 <= y1 < y2 <= altura):
+                return None
+            cliente = imagem[y1:y2, x1:x2]
+        if np.ptp(cliente[::12, ::12, :3], axis=(0, 1)).max() < 8:
+            return None
+        return cv2.cvtColor(cliente, cv2.COLOR_BGRA2BGR)
+
+    def fechar_captura_fundo(self):
+        with self._trava_captura:
+            self._fechar_captura()
+
+    def _fechar_captura(self):
+        captura, self._captura_fundo = self._captura_fundo, None
+        if captura:
+            captura.fechar()
 
     def disponivel(self, janela, parar):
         return (not parar.is_set() and self._area(janela.hwnd) == janela.area
-                and not parar.is_set() and self.user.GetForegroundWindow() == janela.hwnd)
+                and not parar.is_set() and self._modo_disponivel(janela))
+
+    def _modo_disponivel(self, janela):
+        em_foco = self.user.GetForegroundWindow() == janela.hwnd
+        if janela.pid_fundo:
+            return (not em_foco and self._pid(janela.hwnd) == janela.pid_fundo
+                    and self.user.IsWindowVisible(janela.hwnd) and not self.user.IsIconic(janela.hwnd))
+        return em_foco
 
     def motivo_interrupcao(self, janela, parar):
         if parar.is_set():
             return "painel_pausado"
-        if self.user.GetForegroundWindow() != janela.hwnd:
+        if janela.pid_fundo and not self._modo_disponivel(janela):
+            return "janela_ou_foco_mudou"
+        if not janela.pid_fundo and not self._modo_disponivel(janela):
             return "fortnite_perdeu_foco"
         if self._area(janela.hwnd) != janela.area:
             return "area_da_janela_mudou"
-        return "entrada_interrompida"
+        return "mensagem_de_janela_recusada" if janela.pid_fundo else "entrada_interrompida"
 
     def _enviar(self, evento):
         ctypes.set_last_error(0)
@@ -206,6 +360,43 @@ class Windows:
     def _mouse(self, flags, dx=0, dy=0):
         self._enviar(Entrada(0, Dados(mouse=Mouse(dx=dx, dy=dy, flags=flags))))
 
+    def _postar(self, janela, mensagem, wparam, lparam):
+        # Confira o processo inclusive ao soltar comandos depois de uma pausa.
+        return (self._pid(janela.hwnd) == janela.pid_fundo
+                and bool(self.user.PostMessageW(janela.hwnd, mensagem, wparam, lparam)))
+
+    def _tecla_fundo(self, janela, scan, soltando=False):
+        tecla = self.user.MapVirtualKeyW(scan, 3)
+        dados = 1 | ((scan & 0xFF) << 16) | (int(scan > 0xFF) << 24)
+        if soltando:
+            dados |= 0xC0000000
+        return bool(tecla and self._postar(janela, 0x101 if soltando else 0x100, tecla, dados))
+
+    def _ponto_cliente(self, janela):
+        esquerda, topo, direita, base = janela.area
+        if self._ponto_fundo and self._ponto_fundo[0] == janela:
+            return self._ponto_fundo[1]
+        return (direita - esquerda) // 2, (base - topo) // 2
+
+    @staticmethod
+    def _coordenadas_mouse(x, y):
+        return x | (y << 16)
+
+    def _apontar_fundo(self, janela, x, y):
+        if not self._postar(janela, 0x200, 0, self._coordenadas_mouse(x, y)):
+            return False
+        self._ponto_fundo = janela, (x, y)
+        return True
+
+    def _deslocar_mouse(self, janela, dx, dy):
+        if not janela.pid_fundo:
+            self._mouse(1, dx, dy)
+            return True
+        x, y = self._ponto_cliente(janela)
+        esquerda, topo, direita, base = janela.area
+        return self._apontar_fundo(janela, min(max(0, x + dx), direita - esquerda - 1),
+                                  min(max(0, y + dy), base - topo - 1))
+
     def _esperar(self, janela, parar, duracao):
         fim = self.relogio() + duracao
         while self.disponivel(janela, parar):
@@ -221,7 +412,11 @@ class Windows:
             for scan in teclas:
                 if not self.disponivel(janela, parar):
                     return False
-                self._tecla(scan)
+                if janela.pid_fundo:
+                    if not self._tecla_fundo(janela, scan):
+                        return False
+                else:
+                    self._tecla(scan)
                 enviadas.append(scan)
             if not (dx or dy):
                 return self._esperar(janela, parar, duracao)
@@ -231,7 +426,8 @@ class Windows:
                 if not self.disponivel(janela, parar):
                     return False
                 x, y = round(i * dx / segmentos), round(i * dy / segmentos)
-                self._mouse(1, x - x_anterior, y - y_anterior)
+                if not self._deslocar_mouse(janela, x - x_anterior, y - y_anterior):
+                    return False
                 x_anterior, y_anterior = x, y
                 if not self._esperar(janela, parar, duracao / segmentos):
                     return False
@@ -239,6 +435,10 @@ class Windows:
         finally:
             falha = None
             for scan in reversed(enviadas):
+                if janela.pid_fundo:
+                    if not self._tecla_fundo(janela, scan, soltando=True):
+                        falha = OSError("O Windows recusou a liberação de uma tecla em segundo plano.")
+                    continue
                 try:
                     self._tecla(scan, soltando=True)
                 except OSError as erro:
@@ -253,6 +453,15 @@ class Windows:
     def _clique(self, janela, parar, duracao):
         if not self.disponivel(janela, parar):
             return False
+        if janela.pid_fundo:
+            dados = self._coordenadas_mouse(*self._ponto_cliente(janela))
+            if not self._postar(janela, 0x201, 1, dados):
+                return False
+            try:
+                return self._esperar(janela, parar, duracao)
+            finally:
+                if not self._postar(janela, 0x202, 0, dados):
+                    raise OSError("O Windows recusou a liberação do clique em segundo plano.")
         self._mouse(2)
         try:
             self._esperar(janela, parar, duracao)
@@ -284,6 +493,13 @@ class Windows:
             x, y = esquerda + round(x), topo + round(y)
             if not (esquerda <= x < direita and topo <= y < base):
                 return False
+            if janela.pid_fundo:
+                if not self._apontar_fundo(janela, x - esquerda, y - topo):
+                    return False
+                if acao.tipo == "apontar":
+                    return True
+                return (self._esperar(janela, parar, 0.10)
+                        and self._clique(janela, parar, 0.15 if acao.tentativa % 2 else 0.085))
             if self.fortnite_em_foco() != janela or not self.disponivel(janela, parar):
                 return False
             if not self.user.SetCursorPos(x, y):
@@ -304,7 +520,7 @@ class Windows:
                 if tipo == "pausa":
                     ok = self._esperar(janela, parar, *dados)
                 elif tipo == "clique":
-                    ok = not self.cursor_visivel() and self._clique(janela, parar, *dados)
+                    ok = (janela.pid_fundo or not self.cursor_visivel()) and self._clique(janela, parar, *dados)
                 elif tipo == "mouse":
                     dx, dy, duracao = dados
                     ok = self._pressionar(janela, parar, (), duracao, dx, dy)

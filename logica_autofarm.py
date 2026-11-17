@@ -62,6 +62,7 @@ class Config:
     minutos_partida: float = 7.5
     anti_afk: bool = True
     rotina_aerea: bool = True
+    segundo_plano: bool = False
     atualizar_auto: bool = True
     resgatar_recompensas: bool = True
     notificar_tesouros: bool = False
