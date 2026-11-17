@@ -569,11 +569,13 @@ class PainelTest(unittest.TestCase):
         ])
 
     def test_config_persiste_preferencia_de_notificacoes(self):
-        config = replace(Config(), notificacoes=False)
+        config = replace(Config(), notificacoes=False, capturas_diagnostico=True)
         with TemporaryDirectory() as diretorio:
             with patch("app.CONFIG", Path(diretorio) / "ajustes.json"):
                 salvar_config(config)
-                self.assertFalse(carregar_config().notificacoes)
+                carregada = carregar_config()
+                self.assertFalse(carregada.notificacoes)
+                self.assertTrue(carregada.capturas_diagnostico)
 
     def test_testar_imagem_exibe_metadados_sem_enviar_entrada(self):
         chamadas = []
@@ -648,9 +650,13 @@ class PainelTest(unittest.TestCase):
 
 
 class MonitorTest(unittest.TestCase):
+    def test_capturas_de_diagnostico_sao_opt_in(self):
+        self.assertFalse(Config().capturas_diagnostico)
+
     def test_cliques_recusados_pelo_windows_nao_consomem_tentativas(self):
         detector = TelaSimulada()
         detector.nome = "jogar"
+        detector.config = replace(detector.config, capturas_diagnostico=True)
         detector.templates = dict.fromkeys(TEMPLATES)
         detector.em_partida = lambda _: False
         fluxo = Fluxo(detector)
@@ -675,8 +681,10 @@ class MonitorTest(unittest.TestCase):
         with TemporaryDirectory() as diretorio:
             logger = configurar_logger(Path(diretorio) / "autofarm.log")
             with patch("app.configurar_logger", return_value=logger), \
+                    patch("app.DEBUG_DIR", Path(diretorio) / "debug"), \
                     patch("app.time", SimpleNamespace(monotonic=lambda: next(instantes))):
                 monitorar(windows, fluxo, eventos, parar)
+            capturas = list((Path(diretorio) / "debug").glob("*_entrada_recusada.jpg"))
             for handler in logger.handlers:
                 handler.flush()
             texto = (Path(diretorio) / "autofarm.log").read_text(encoding="utf-8")
@@ -688,9 +696,14 @@ class MonitorTest(unittest.TestCase):
             eventos_lidos.append(eventos.get())
         self.assertEqual(tentativas, [0, 0, 0, 0])
         self.assertEqual(fluxo.partidas, 0)
-        self.assertIn("acao_nao_concluida", texto)
+        self.assertIn("Ação não concluída", texto)
         self.assertIn("motivo=entrada_recusada", texto)
-        self.assertIn("acao_com_erro", texto)
+        self.assertIn("Jogar Novamente (template 1.00)", texto)
+        self.assertIn("centro_janela=(20,20)", texto)
+        self.assertIn("via SendInput", texto)
+        self.assertIn("Captura salva em", texto)
+        self.assertTrue(capturas)
+        self.assertIn("Erro ao executar ação", texto)
         self.assertIn(("erro", "falha simulada"), eventos_lidos)
         resumo = next(valor for evento, valor in eventos_lidos if evento == "relatorio")
         self.assertEqual(len(resumo["erros"]), 1)
@@ -713,6 +726,9 @@ class MonitorTest(unittest.TestCase):
 
             def passo(self, *_args, **_kwargs):
                 self.ciclo += 1
+                if self.ciclo == 1:
+                    self.partidas = 1
+                    return Acao("fila_confirmada")
                 if self.ciclo == 2:
                     self.inicio_partida = 1.0
                     return Acao("partida_confirmada")
@@ -745,6 +761,7 @@ class MonitorTest(unittest.TestCase):
             with patch("app.configurar_logger", return_value=logger), \
                     patch("app.time", SimpleNamespace(monotonic=iter(range(20)).__next__)):
                 monitorar(windows, fluxo, eventos, parar)
+            texto = (Path(diretorio) / "autofarm.log").read_text(encoding="utf-8")
             for handler in logger.handlers:
                 logger.removeHandler(handler)
                 handler.close()
@@ -755,6 +772,9 @@ class MonitorTest(unittest.TestCase):
         notificacoes = [valor[0] for evento, valor in eventos_lidos if evento == "notificacao"]
         self.assertEqual(resumo["partidas_iniciadas"], 1)
         self.assertEqual(resumo["retornos_ao_lobby"], 1)
+        self.assertIn("Fila confirmada.", texto)
+        self.assertIn("Partida nova reconhecida. Cronômetro iniciado", texto)
+        self.assertIn("Retorno ao lobby reconhecido.", texto)
         self.assertIn("Partida reconhecida", notificacoes)
         self.assertIn("Retorno ao lobby", notificacoes)
 

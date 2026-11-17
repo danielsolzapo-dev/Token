@@ -45,6 +45,7 @@ class Config:
     anti_afk: bool = True
     avisar_bau: bool = False
     notificacoes: bool = True
+    capturas_diagnostico: bool = False
 
 
 @dataclass(frozen=True)

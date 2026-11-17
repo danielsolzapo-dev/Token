@@ -45,8 +45,9 @@ VERMELHO = "#f07b83"
 CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 LOG_FILE = CONFIG.with_name("autofarm.log")
 CHEST_REFERENCE = CONFIG.with_name("referencia_bau.png")
+DEBUG_DIR = CONFIG.parent / "debug"
 CAMPOS = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk",
-          "avisar_bau", "notificacoes", "minutos_partida")
+          "avisar_bau", "notificacoes", "capturas_diagnostico", "minutos_partida")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
     "lobby_pronto": "Pronto", "menu_aba": "Abrir menu", "voltar_lobby": "Voltar ao lobby",
@@ -68,6 +69,39 @@ def configurar_logger(caminho=None):
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logger.addHandler(handler)
     return logger
+
+
+def descrever_entrada(acao, janela):
+    if acao.tipo == "clicar" and acao.alvo is not None:
+        alvo = acao.alvo
+        x, y = (round(ponto) for ponto in alvo.centro)
+        coordenadas = f"centro_janela=({x},{y})"
+        area = getattr(janela, "area", None)
+        if area and len(area) == 4:
+            coordenadas += f" tela=({area[0] + x},{area[1] + y})"
+        nome = {
+            "lobby_jogar": "JOGAR (lobby)",
+            "lobby_pronto": "PRONTO (lobby)",
+        }.get(alvo.nome, ROTULOS.get(alvo.nome, alvo.nome))
+        identificacao = "OCR" if alvo.metodo == "texto" else f"{alvo.metodo} {alvo.score:.2f}"
+        return (
+            f"Clique em {nome} ({identificacao}) "
+            f"{coordenadas} via SendInput."
+        )
+    if acao.tipo == "esc":
+        return "ESC pressionado via SendInput."
+    if acao.tipo == "movimento":
+        inverso = {scan: tecla for tecla, scan in TECLAS.items()}
+        teclas = sorted({
+            inverso[scan]
+            for passo in acao.passos if passo[0] in ("teclas", "andar_mouse")
+            for scan in passo[1] if scan in inverso
+        })
+        return (
+            f"Movimento anti-AFK ({'/'.join(teclas) or 'mouse'}; "
+            f"{len(acao.passos)} passo(s)) via SendInput."
+        )
+    return f"Ação {acao.tipo} via SendInput."
 
 
 def carregar_config():
@@ -100,6 +134,8 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
     logger = None
     observador_bau = ObservadorBau()
     proxima_busca_bau = 0.0
+    capturas_salvas = set()
+    quadro = None
     inicio_monotonic = time.monotonic()
     relatorio = {
         "versao": VERSAO,
@@ -120,10 +156,28 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
         if fluxo.config.notificacoes:
             eventos.put(("notificacao", (titulo, mensagem)))
 
+    def salvar_captura(motivo, imagem):
+        if (not getattr(fluxo.config, "capturas_diagnostico", False)
+                or logger is None or imagem is None or motivo in capturas_salvas):
+            return
+        try:
+            DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+            nome = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + f"_{motivo}.jpg"
+            sucesso, buffer = cv2.imencode(".jpg", imagem, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not sucesso:
+                raise ValueError("O OpenCV não conseguiu codificar a captura.")
+            caminho = DEBUG_DIR / nome
+            caminho.write_bytes(buffer.tobytes())
+        except (OSError, ValueError, cv2.error):
+            logger.exception("Falha ao salvar captura de diagnóstico motivo=%s", motivo)
+        else:
+            capturas_salvas.add(motivo)
+            logger.info("Captura salva em %s", caminho)
+
     aguardar = getattr(windows, "aguardar", parar.wait)
     try:
         logger = configurar_logger()
-        logger.info("monitor_iniciado versao=%s", VERSAO)
+        logger.info("Automação INICIADA. versão=%s.", VERSAO)
         detector = fluxo.detector
         if fluxo.config.avisar_bau and detector_bau is None:
             raise ValueError("Selecione uma referência de baú antes de iniciar o aviso.")
@@ -152,6 +206,7 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                 if detector.dialogo_ambiguo and not dialogo_ambiguo_anterior:
                     logger.warning("dialogo_saida_ambiguo acao_bloqueada")
                     eventos.put(("acao", "Confirmação de saída ambígua. Confira o jogo."))
+                    salvar_captura("dialogo_ambiguo", quadro)
                 dialogo_ambiguo_anterior = detector.dialogo_ambiguo
                 onibus = bool(detector.procurar(quadro, ("onibus",), 0.8))
                 contagem = fluxo.partidas
@@ -162,9 +217,14 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                 partida_agora = fluxo.inicio_partida is not None
                 if not partida_antes and partida_agora:
                     relatorio["partidas_iniciadas"] += 1
+                    logger.info(
+                        "Partida nova reconhecida. Cronômetro iniciado; anti-AFK ativo=%s.",
+                        fluxo.config.anti_afk,
+                    )
                     avisar("Partida reconhecida", "O Auto Farm confirmou uma partida nova.")
                 if partida_antes and not partida_agora and retorno_lobby_pendente:
                     relatorio["retornos_ao_lobby"] += 1
+                    logger.info("Retorno ao lobby reconhecido.")
                     avisar("Retorno ao lobby", "O retorno ao lobby foi reconhecido.")
                     retorno_lobby_pendente = False
                 if (acao and (acao.tipo == "esc" or (
@@ -215,7 +275,7 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                 )
                 if assinatura != assinatura_anterior:
                     logger.info(
-                        "estado focus=%s hud=%s partida=%s espectador_reset=%s onibus=%s "
+                        "Estado do detector: focus=%s hud=%s partida=%s espectador_reset=%s onibus=%s "
                         "inventario=%s pausa=%s tela_desconhecida=%s cronometro=%s "
                         "anti_afk=%s bloqueio=%s",
                         bool(janela), hud_visivel, partida, espectador_ou_reset, onibus, inventario,
@@ -245,33 +305,42 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                 acao_de_entrada = acao is not None and acao.tipo in ("esc", "clicar", "movimento")
                 if acao_de_entrada:
                     alvo = acao.alvo.nome if acao.tipo == "clicar" else acao.tipo
+                    descricao_entrada = descrever_entrada(acao, janela)
                     logger.info(
-                        "acao_solicitada tipo=%s alvo=%s tentativa=%s passos=%s",
-                        acao.tipo, alvo, acao.tentativa,
-                        len(acao.passos) if acao.tipo == "movimento" else 1,
+                        "Ação solicitada: %s tentativa=%s.",
+                        descricao_entrada, acao.tentativa,
                     )
                     try:
                         executada = windows.executar(janela, acao, parar)
                     except (OSError, ValueError, cv2.error):
                         relatorio["falhas_de_entrada"] += 1
-                        logger.exception("acao_com_erro tipo=%s alvo=%s", acao.tipo, alvo)
+                        logger.exception("Erro ao executar ação: %s", descricao_entrada)
                         raise
                     if executada:
-                        logger.info("acao_enviada tipo=%s alvo=%s", acao.tipo, alvo)
+                        logger.info("Ação enviada: %s", descricao_entrada)
                     else:
                         motivo = getattr(windows, "ultima_falha", None) or "entrada_recusada"
                         relatorio["falhas_de_entrada"] += 1
                         logger.warning(
-                            "acao_nao_concluida tipo=%s alvo=%s tentativa=%s motivo=%s",
-                            acao.tipo, alvo, acao.tentativa, motivo,
+                            "Ação não concluída: %s tentativa=%s motivo=%s.",
+                            descricao_entrada, acao.tentativa, motivo,
                         )
+                        salvar_captura("entrada_recusada", quadro)
                 else:
                     executada = acao is not None
+                    if acao and acao.tipo in (
+                        "clique_ignorado", "partida_nao_confirmada", "fila_sem_partida",
+                        "tela_nao_reconhecida", "menu_nao_encontrado", "lobby_nao_encontrado",
+                    ):
+                        salvar_captura(acao.tipo, quadro)
                 if acao and acao.tipo == "clicar":
                     fluxo.registrar_clique(acao, executada, time.monotonic(), hud_visivel=hud_visivel)
                 if fluxo.partidas != contagem:
                     relatorio["filas_confirmadas"] += max(0, fluxo.partidas - contagem)
-                    logger.info("partida_confirmada contador=%s cronometro_iniciado=true", fluxo.partidas)
+                    if acao and acao.tipo == "fila_confirmada":
+                        logger.info("Fila confirmada. Partidas reiniciadas: %s.", fluxo.partidas)
+                    else:
+                        logger.info("Partida reconhecida na fila. Contador: %s.", fluxo.partidas)
                     eventos.put(("total", fluxo.partidas))
                 if executada:
                     if acao.tipo == "clicar":
@@ -299,6 +368,7 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                         }.get(acao.tipo)
                     if texto and texto != acao_anterior:
                         eventos.put(("acao", texto))
+                        logger.info("Evento: %s.", texto)
                         acao_anterior = texto
                 elif acao:
                     fluxo.pausar()
@@ -314,11 +384,14 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
                                 fluxo.config.anti_afk)
                     assinatura_anterior = assinatura
             if estado != estado_anterior:
+                logger.info("Status: %s.", estado)
                 eventos.put(("estado", estado))
                 if estado == "Aguardando o Fortnite em primeiro plano":
                     relatorio["interrupcoes_foco_janela"] += 1
+                    logger.info("Foco perdido; automação aguardando o Fortnite.")
                     avisar("Fortnite sem foco", "O monitor aguarda o Fortnite em primeiro plano.")
                 elif estado_anterior == "Aguardando o Fortnite em primeiro plano":
+                    logger.info("Foco do Fortnite restaurado.")
                     avisar("Foco restaurado", "O Fortnite voltou ao primeiro plano.")
                 estado_anterior = estado
             aguardar(0.18 if pronto else 0.3)
@@ -326,12 +399,13 @@ def monitorar(windows, fluxo, eventos, parar, detector_bau=None):
         relatorio["erros"].append(f"{type(erro).__name__}: {erro}")
         if logger:
             logger.exception("monitor_encerrado_com_erro")
+            salvar_captura("erro_monitor", quadro)
         eventos.put(("erro", str(erro)))
         avisar("Erro no Auto Farm", str(erro))
     finally:
         fluxo.pausar()
         if logger:
-            logger.info("monitor_encerrado")
+            logger.info("Automação PAUSADA/ENCERRADA.")
         relatorio["fim_local"] = datetime.now().astimezone().isoformat(timespec="seconds")
         relatorio["duracao_segundos"] = round(max(0.0, time.monotonic() - inicio_monotonic), 1)
         eventos.put(("relatorio", relatorio))
@@ -494,6 +568,10 @@ class Painel:
         )
         self.botao_relatorio.pack(side="left", padx=(10, 0))
         self.botao_relatorio.state(["disabled"])
+        ttk.Checkbutton(
+            diagnosticos, text="Salvar capturas em falhas",
+            variable=self.opcoes["capturas_diagnostico"],
+        ).pack(side="left", padx=(10, 0))
 
         atualizacao = ttk.Frame(painel, style="Card.TFrame", padding=(15, 11))
         atualizacao.pack(fill="x")
