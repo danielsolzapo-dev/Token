@@ -466,6 +466,7 @@ class Detector:
         hsv = cv2.cvtColor(recorte, cv2.COLOR_BGR2HSV)
         altura, largura = hsv.shape[:2]
         branco = cv2.inRange(hsv, (0, 0, 185), (180, 85, 255))
+        branco_claro = None
         # Duas faixas de brilho acomodam HUDs claros e escuros.
         for v_min in (155, 95):
             verde = cv2.inRange(hsv, (28, 120, v_min), (82, 255, 255))
@@ -474,9 +475,15 @@ class Detector:
                 x, y, w, h = cv2.boundingRect(contorno)
                 if not (10 <= h <= 60 and w >= 1.2 * h and x < 0.35 * largura and y > 0.4 * altura):
                     continue
-                if (cv2.countNonZero(verde[y:y + h, x:x + w]) >= 0.60 * w * h
-                        and hsv[y:y + h, x:x + w, 0].mean() < 65
-                        and _cruz_da_vida(branco, x, y, h)):
+                barra = verde[y:y + h, x:x + w]
+                if cv2.countNonZero(barra) < 0.60 * w * h or hsv[y:y + h, x:x + w, 0].mean() >= 65:
+                    continue
+                if _cruz_da_vida(branco, x, y, h):
+                    return True
+                # Fundos claros podem ligar a cruz ao cenário na primeira máscara.
+                if branco_claro is None:
+                    branco_claro = cv2.inRange(hsv, (0, 0, 220), (180, 85, 255))
+                if _cruz_da_vida(branco_claro, x, y, h):
                     return True
         return False
 

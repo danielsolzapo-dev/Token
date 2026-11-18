@@ -75,11 +75,11 @@ def salvar_config(config):
     provisoria.replace(CONFIG)
 
 
-def salvar_falha_regiao(quadro, diagnostico):
+def salvar_captura_diagnostico(quadro, diagnostico, evento, arquivo):
     if quadro is None:
-        diagnostico.registrar("falha_regiao")
+        diagnostico.registrar(evento)
         return
-    caminho = ARQUIVO_LOG.parent / "debug" / "regiao_ultima_falha.jpg"
+    caminho = ARQUIVO_LOG.parent / "debug" / arquivo
     try:
         ok, imagem = cv2.imencode(".jpg", quadro, [cv2.IMWRITE_JPEG_QUALITY, 88])
         if not ok:
@@ -89,9 +89,9 @@ def salvar_falha_regiao(quadro, diagnostico):
         provisoria.write_bytes(imagem.tobytes())
         provisoria.replace(caminho)
     except (OSError, ValueError, cv2.error):
-        diagnostico.registrar("falha_regiao", captura="indisponivel")
+        diagnostico.registrar(evento, captura="indisponivel")
     else:
-        diagnostico.registrar("falha_regiao", captura="debug/regiao_ultima_falha.jpg")
+        diagnostico.registrar(evento, captura=f"debug/{arquivo}")
 
 
 def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
@@ -109,6 +109,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
     candidato_esquadrao = contagem_esquadrao = None
     quadros_esquadrao = 0
     aguardando_foco = None
+    hud_ausente_desde = None
+    perda_hud_registrada = False
     etapa = "iniciar"
     acao = None
     try:
@@ -183,6 +185,15 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                    asa_delta=asa_delta, espectando=bool(bloqueio_hud))
                 if parar.is_set():
                     break
+                if fluxo.inicio_partida is None or hud_visivel or onibus or asa_delta or bloqueio_hud or fluxo.navegando_menu:
+                    hud_ausente_desde = None
+                    perda_hud_registrada = False
+                elif fluxo.motivo_anti_afk == "hud_indisponivel":
+                    if hud_ausente_desde is None:
+                        hud_ausente_desde = agora
+                    elif diagnostico and not perda_hud_registrada and agora - hud_ausente_desde >= 5:
+                        salvar_captura_diagnostico(quadro, diagnostico, "falha_hud", "hud_ultima_falha.jpg")
+                        perda_hud_registrada = True
                 if diagnostico and fluxo.motivo_anti_afk == "ajustando_regiao":
                     tela = fluxo.regiao.ultima_tela
                     if tela is not None and tela is not tela_regiao_anterior:
@@ -223,6 +234,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                           "Procurando botões")
                 if fluxo.motivo_anti_afk == "aguardando_transicao_da_fila":
                     estado = "Aguardando transição da fila"
+                elif hud_ausente_desde is not None and fluxo.motivo_anti_afk == "hud_indisponivel":
+                    estado = "HUD da partida indisponível"
                 elif fluxo.motivo_anti_afk in ("saida_por_tempo", "saida_por_tempo_sem_hud", "aguardando_menu_de_saida"):
                     estado = "Saindo da partida"
                 elif fluxo.motivo_anti_afk == "ajustando_regiao":
@@ -269,7 +282,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                           metodo=metodo)
                 if diagnostico and acao and acao.tipo in ("regiao_falhou", "regiao_ok"):
                     if acao.tipo == "regiao_falhou":
-                        salvar_falha_regiao(captura_regiao, diagnostico)
+                        salvar_captura_diagnostico(captura_regiao, diagnostico, "falha_regiao", "regiao_ultima_falha.jpg")
                     tela_regiao_anterior = leitura_regiao_anterior = captura_regiao = None
                 if acao and acao.tipo == "clicar" and not acao.alvo.nome.startswith("regiao_"):
                     fluxo.registrar_clique(acao, executada, time.monotonic(), no_onibus=onibus)
@@ -344,6 +357,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                         eventos.put(("acao", texto))
             else:
                 fluxo.pausar()
+                hud_ausente_desde = None
                 candidato_esquadrao = contagem_esquadrao = None
                 quadros_esquadrao = 0
                 estado = "Aguardando o Fortnite em primeiro plano"

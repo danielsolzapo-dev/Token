@@ -624,6 +624,16 @@ class FluxoTest(unittest.TestCase):
 
 
 class DetectorTest(unittest.TestCase):
+    def test_cruz_da_vida_em_fundo_claro(self):
+        detector = Detector()
+        quadro = np.zeros((540, 960, 3), dtype=np.uint8)
+        quadro[470:493, :32] = 200
+        quadro[475:486, 32:105] = (0, 215, 145)
+        self.assertFalse(detector.em_partida(quadro))
+        quadro[477:484, 25:27] = 255
+        quadro[479:482, 23:30] = 255
+        self.assertTrue(detector.em_partida(quadro.copy()))
+
     def test_amarelo_sozinho_nao_autoriza_clique(self):
         quadro = np.zeros((540, 960, 3), dtype=np.uint8)
         quadro[225:270, 690:890] = (0, 255, 255)
@@ -824,6 +834,38 @@ class PainelTest(unittest.TestCase):
 
 
 class MonitorTest(unittest.TestCase):
+    def test_perda_prolongada_do_hud_guarda_uma_captura_antes_de_perder_foco(self):
+        detector = TelaSimulada()
+        detector.templates = dict.fromkeys(TEMPLATES)
+        detector.config = replace(detector.config, anti_afk=True, sair_por_tempo=False)
+        detector.em_partida = lambda _: False
+        fluxo = Fluxo(detector)
+        fluxo._iniciar_partida(0)
+        parar = Mock(wraps=Event())
+        instantes = iter((7, 10, 13, 18))
+        quadro = np.zeros((540, 960, 3), dtype=np.uint8)
+        j = Janela(42, (0, 0, 960, 540))
+        windows = Mock()
+        janelas = iter([j] * 4)
+
+        def localizar():
+            janela = next(janelas, None)
+            if janela is None:
+                parar.set()
+            return janela
+
+        windows.fortnite_em_foco.side_effect = localizar
+        windows.capturar.return_value = quadro
+        diagnostico = Mock()
+        eventos = SimpleQueue()
+        with patch("app.time", SimpleNamespace(monotonic=lambda: next(instantes))), \
+                patch("app.salvar_captura_diagnostico") as salvar:
+            monitorar(windows, fluxo, eventos, parar, diagnostico)
+        salvar.assert_called_once_with(quadro, diagnostico, "falha_hud", "hud_ultima_falha.jpg")
+        self.assertIn(("estado", "HUD da partida indisponível"),
+                      [eventos.get_nowait() for _ in range(eventos.qsize())])
+        windows.executar.assert_not_called()
+
     def test_clique_ignorado_em_fundo_aguarda_foco_e_tenta_de_novo(self):
         detector = TelaSimulada()
         detector.templates = dict.fromkeys(TEMPLATES)
