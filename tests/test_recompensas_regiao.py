@@ -115,6 +115,26 @@ class RegiaoTest(unittest.TestCase):
             instante = datetime(2026, 11, 17, hora_utc, tzinfo=timezone.utc)
             self.assertEqual(regiao_por_horario("Oceania", "NA-Central", instante), regiao)
 
+    def test_le_rodape_ampliado_quando_configuracoes_nao_aparecem_no_ocr_geral(self):
+        quadro = np.zeros((860, 1440, 3), np.uint8)
+        rodape = [Linha("R Restaurar padrão", (153, 135, 252, 32)),
+                  Linha("E5C Voltar", (561, 135, 142, 32))]
+
+        def ler(imagem):
+            return [Linha("Brilho", (135, 195, 105, 30))] if imagem is quadro else rodape
+
+        detector = Detector(leitor=SimpleNamespace(linhas=ler))
+        tela = detector.tela_regiao(quadro)
+        self.assertTrue(tela.configuracoes)
+        self.assertIsNotNone(tela.voltar)
+        fluxo = RegiaoLobby()
+        fluxo.iniciar("NA-Oeste", 0)
+        ordem = fluxo.passo(tela, 2)
+        self.assertEqual((ordem.tipo, ordem.etapa), ("clicar", "abrir_aba_jogo"))
+        x, y, w, h = ordem.caixa
+        self.assertAlmostEqual(x + w / 2, 582, delta=3)
+        self.assertAlmostEqual(y + h / 2, 37, delta=3)
+
     def test_le_regiao_truncada_sem_confundir_com_torneio(self):
         linhas = [Linha("IDIOMA E REGIÃO", (376, 122, 251, 33)),
                   Linha("Região de Pareament", (398, 188, 221, 25)),

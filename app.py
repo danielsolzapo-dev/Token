@@ -186,7 +186,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                     tela = fluxo.regiao.ultima_tela
                     if tela is not None and tela is not tela_regiao_anterior:
                         tela_regiao_anterior = tela
-                        if tela.configuracoes or tela.social or captura_regiao is None:
+                        if fluxo.regiao.fechando is None or captura_regiao is None:
                             captura_regiao = quadro
                         principal, subregiao = tela.pareamento, tela.subregiao
                         seletor = subregiao if (principal and principal.valor == AMERICA_DO_NORTE

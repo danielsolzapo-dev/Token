@@ -71,9 +71,14 @@ def ler_tela_regiao(linhas, largura, altura):
 
     rotulos = [(linha, normalizar(linha.texto)) for linha in linhas]
     rodape = [(linha, texto) for linha, texto in rotulos if linha.centro[1] >= 0.86 * altura]
+    rodape_direito = [(linha, texto) for linha, texto in rodape if linha.centro[0] >= 0.60 * largura]
     aplicar = next((l.caixa for l, t in rodape if t in {"APLICAR", "A APLICAR", "APPLY", "A APPLY"}), None)
     voltar = next((l.caixa for l, t in rodape if t in {"VOLTAR", "ESC VOLTAR", "BACK", "ESC BACK"}), None)
-    restaurar = any("RESTAURAR PADRAO" in t or "RESTORE TO DEFAULT" in t for _, t in rodape)
+    restaurar = any(re.search(r"\b(?:RESTAURAR (?:O )?PADR(?:AO|A0)|RESTORE TO DEFAULT)\b", t)
+                    for _, t in rodape_direito)
+    if restaurar and not voltar:
+        voltar = next((l.caixa for l, t in rodape_direito
+                       if re.fullmatch(r"(?:ES|SC|E5C)? ?(?:VOLTAR|BACK)", t)), None)
     titulo = any(t in {"IDIOMA E REGIAO", "LANGUAGE AND REGION"} and l.centro[1] < 0.30 * altura
                  for l, t in rotulos)
     a_direita = [(l, t) for l, t in rotulos if l.centro[0] > 0.65 * largura]
@@ -142,7 +147,8 @@ def ler_tela_regiao(linhas, largura, altura):
 
     pareamento = linha_regiao(rotulo_pareamento) if configuracoes else None
     subregiao = linha_regiao(rotulo_subregiao) if configuracoes else None
-    aba_jogo = (round(largura * 0.38), round(altura * 0.023), round(largura * 0.04), round(altura * 0.04))
+    aba_jogo = (round(largura / 2 - altura * 0.19), round(altura * 0.018),
+                round(altura * 0.06), round(altura * 0.05))
     return TelaRegiao(social, configuracoes, engrenagem, aba_jogo if configuracoes and not (titulo or pareamento) else None,
                       pareamento, subregiao, aplicar, voltar)
 

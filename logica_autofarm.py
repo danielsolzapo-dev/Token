@@ -306,6 +306,15 @@ class Detector:
         leitor = self._carregar_leitor()
         linhas = leitor.linhas(quadro)
         tela = ler_tela_regiao(linhas, largura, altura)
+        if not (tela.social or tela.configuracoes or tela.dialogo_alteracoes):
+            # Ao abrir Configurações, o rodapé pode ficar pequeno na leitura da tela inteira.
+            rodape, x0, y0 = _roi(quadro, (0.59, 0.86, 1, 1))
+            linhas_rodape = []
+            for linha in leitor.linhas(_resize(rodape, 1.5)):
+                x, y, w, h = (round(v / 1.5) for v in linha.caixa)
+                linhas_rodape.append(replace(linha, caixa=(x + x0, y + y0, w, h)))
+            linhas = [*linhas, *linhas_rodape]
+            tela = ler_tela_regiao(linhas, largura, altura)
         principal, subregiao = tela.pareamento, tela.subregiao
         precisa_detalhar = (not principal or not principal.valor
                             or (principal.valor == AMERICA_DO_NORTE and (not subregiao or not subregiao.valor)))
