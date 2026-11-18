@@ -10,8 +10,7 @@ import cv2
 import numpy as np
 
 from embarque import Embarque
-from regiao import (AMERICA_DO_NORTE, MANHA, NOITE, RegiaoLobby, TelaRegiao,
-                    identificar_regiao, ler_tela_regiao, regiao_por_horario)
+from regiao import MANHA, NOITE, RegiaoLobby, TelaRegiao, ler_tela_regiao, regiao_por_horario
 
 
 # Nome do PNG, região de busca (x0, y0, x1, y1) e fator de trabalho em 1080p.
@@ -316,20 +315,13 @@ class Detector:
                 linhas_rodape.append(replace(linha, caixa=(x + x0, y + y0, w, h)))
             linhas = [*linhas, *linhas_rodape]
             tela = ler_tela_regiao(linhas, largura, altura)
-        principal, subregiao = tela.pareamento, tela.subregiao
-        precisa_detalhar = (not principal or not principal.valor
-                            or (principal.valor == AMERICA_DO_NORTE and (not subregiao or not subregiao.valor)))
-        if tela.configuracoes and precisa_detalhar:
+        if tela.configuracoes and not (tela.pareamento and tela.pareamento.valor):
             recorte, x0, y0 = _roi(quadro, (0.10, 0.13, 0.66, 0.46))
             detalhadas = []
             for linha in leitor.linhas(_resize(recorte, 1.5)):
                 x, y, w, h = (round(v / 1.5) for v in linha.caixa)
                 detalhadas.append(replace(linha, caixa=(x + x0, y + y0, w, h)))
             tela = ler_tela_regiao([*linhas, *detalhadas], largura, altura)
-        if tela.subregiao and tela.subregiao.focada and not tela.subregiao.valor:
-            valor = self._subregiao_destacada(quadro, linhas)
-            if valor:
-                tela = replace(tela, subregiao=replace(tela.subregiao, valor=valor))
         if tela.social:
             if engrenagem:
                 tela = replace(tela, engrenagem=engrenagem.caixa)
@@ -337,8 +329,7 @@ class Detector:
                 antiga = self.buscar_template(quadro, "engrenagem_lobby", 0.87)
                 if antiga and antiga.score >= 0.87:
                     tela = replace(tela, engrenagem=antiga.caixa)
-        return replace(tela, pareamento=self._setas_regiao(quadro, tela.pareamento),
-                       subregiao=self._setas_regiao(quadro, tela.subregiao))
+        return replace(tela, pareamento=self._setas_regiao(quadro, tela.pareamento))
 
     def _engrenagem_horizontal(self, quadro):
         altura, largura = quadro.shape[:2]
@@ -346,23 +337,6 @@ class Detector:
                    1 - 0.263 * altura / largura, 0.106)
         alvo = self.buscar_template(quadro, "engrenagem_menu_lobby", 0.87, limites=limites)
         return alvo if alvo and alvo.score >= 0.87 else None
-
-    @staticmethod
-    def _subregiao_destacada(quadro, linhas):
-        altura, largura = quadro.shape[:2]
-        selecoes = set()
-        for linha in linhas:
-            x, y, _, h = linha.caixa
-            if not (0.55 * largura <= x <= 0.74 * largura and 0.39 * altura <= y <= 0.78 * altura):
-                continue
-            valor = identificar_regiao(linha.texto)
-            if valor:
-                # O texto escuro da opção ativa aparece sobre uma faixa branca.
-                recorte = quadro[y:y + h, int(largura * 0.70):int(largura * 0.78)]
-                branco = cv2.inRange(recorte, (220, 220, 220), (255, 255, 255))
-                if cv2.countNonZero(branco) >= 0.75 * branco.size:
-                    selecoes.add(valor)
-        return next(iter(selecoes)) if len(selecoes) == 1 else None
 
     def _menu_do_painel_social(self, quadro):
         altura, largura = quadro.shape[:2]

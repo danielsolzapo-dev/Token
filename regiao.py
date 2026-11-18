@@ -7,14 +7,9 @@ import re
 
 BRASILIA = timezone(timedelta(hours=-3))
 MANHA = ("Ásia", "Oceania")
-NOITE = ("Brasil", "NA-Leste", "NA-Central")
-NORTE = {"NA-Leste", "NA-Central", "NA-Oeste"}
 AMERICA_DO_NORTE = "América do Norte"
-SUBREGIOES_NA = {
-    "NA-Leste": {"Virginia", "Ohio"},
-    "NA-Central": {"Iowa", "Texas"},
-    "NA-Oeste": {"Norte da Califórnia", "Oregon"},
-}
+NOITE = ("Brasil", AMERICA_DO_NORTE)
+NORTE_LEGADO = ("NA-Leste", "NA-Central", "NA-Oeste")
 NOMES = {
     "Automática": ("AUTOMATICA", "AUTOMATICO", "AUTO", "AUTOMATIC"),
     "Ásia": ("ASIA",),
@@ -37,14 +32,19 @@ NOMES = {
 }
 
 
+def regiao_principal(regiao):
+    return AMERICA_DO_NORTE if regiao in NORTE_LEGADO else regiao
+
+
 def regiao_por_horario(manha=MANHA[0], noite=NOITE[0], instante=None):
     hora = (instante or datetime.now(BRASILIA)).astimezone(BRASILIA).hour
     if hora < 6:
-        return "NA-Oeste"
+        return AMERICA_DO_NORTE
     if hora < 11:
         return manha if manha in MANHA else MANHA[0]
     if hora < 18:
         return "Europa"
+    noite = regiao_principal(noite)
     return noite if noite in NOITE else NOITE[0]
 
 
@@ -180,7 +180,7 @@ class RegiaoLobby:
         self.alvo = self.confirmada = self.falhou = None
         self.repetir_em = 0.0
         self.ultima_submissao = self.fechando = None
-        self.linha = self.valor_anterior = None
+        self.valor_anterior = None
         self.tentativas = 0
         self.visitados = set()
         self.sentido = "direita"
@@ -191,16 +191,16 @@ class RegiaoLobby:
         self._apontou = self._selecionou = False
         self._esc_social = 0
         self.ultima_tela = None
-        self._pareamento_lido = None
 
     def iniciar(self, alvo, agora, *, perfil=None):
+        alvo = regiao_principal(alvo)
         if alvo == self.confirmada or (alvo == self.falhou and agora < self.repetir_em):
             return None
         self.confirmada = None
         self.alvo = alvo
         self.proxima, self.prazo = agora + 0.8, agora + 95
         self.ultima_submissao = self.fechando = None
-        self.linha = self.valor_anterior = None
+        self.valor_anterior = None
         self.tentativas = 0
         self.visitados.clear()
         self.sentido = "direita"
@@ -209,7 +209,6 @@ class RegiaoLobby:
         self._apontou = self._selecionou = False
         self._esc_social = 1
         self.ultima_tela = None
-        self._pareamento_lido = None
         if perfil:
             return OrdemRegiao("clicar", "abrir_social", perfil)
         return OrdemRegiao("esc", "abrir_social")
@@ -237,9 +236,8 @@ class RegiaoLobby:
         if not self.pronto(agora):
             return None
         self.ultima_tela = tela
-        principal, sub = tela.pareamento, tela.subregiao
+        principal = tela.pareamento
         assinatura = (tela.social, tela.configuracoes, principal and (principal.valor, principal.focada),
-                      sub and (sub.valor, sub.focada),
                       bool(tela.aplicar), tela.dialogo_alteracoes, lobby)
         if assinatura != self._assinatura:
             self._assinatura, self._ultima_mudanca = assinatura, agora
@@ -262,15 +260,8 @@ class RegiaoLobby:
                 return self._terminar(agora, self.fechando)
             return None
 
-        if principal and principal.valor is not None:
-            self._pareamento_lido = principal.valor
-        if principal or (tela.configuracoes and sub and self._pareamento_lido == AMERICA_DO_NORTE):
-            valor_principal = principal.valor if principal and principal.valor else self._pareamento_lido
-            alvo_na = self.alvo in NORTE
-            concluido = (valor_principal == self.alvo or
-                         (alvo_na and valor_principal == AMERICA_DO_NORTE and sub
-                          and (sub.valor == self.alvo or sub.valor in SUBREGIOES_NA[self.alvo])))
-            if concluido:
+        if principal:
+            if regiao_principal(principal.valor) == self.alvo:
                 if self.alterou and self.ultima_submissao is None:
                     self.ultima_submissao = agora
                     self.prazo = max(self.prazo, agora + 14)
@@ -282,14 +273,7 @@ class RegiaoLobby:
                 if tela.voltar:
                     return self._ordem(agora, "clicar", "fechar_configuracoes", tela.voltar)
                 return self._ordem(agora, "esc", "fechar_configuracoes")
-            nome = "subregiao" if alvo_na and valor_principal == AMERICA_DO_NORTE else "pareamento"
-            linha = sub if nome == "subregiao" else principal
-            if linha is None or (nome == "subregiao" and linha.valor is None):
-                return None
-            ordem = self._ajustar(agora, nome, linha)
-            if ordem and nome == "pareamento" and ordem.etapa == nome and ordem.tipo in ("clicar", "tecla"):
-                self._pareamento_lido = None
-            return ordem
+            return self._ajustar(agora, principal)
         if tela.aba_jogo:
             return self._ordem(agora, "clicar", "abrir_aba_jogo", tela.aba_jogo)
         if tela.social and tela.engrenagem:
@@ -299,12 +283,7 @@ class RegiaoLobby:
             return self._ordem(agora, "esc", "abrir_social")
         return None
 
-    def _ajustar(self, agora, nome, linha):
-        if self.linha != nome:
-            self.linha, self.valor_anterior = nome, None
-            self.visitados.clear()
-            self.tentativas, self.sentido = 0, "direita"
-            self._apontou = self._selecionou = False
+    def _ajustar(self, agora, linha):
         if linha.valor != self.valor_anterior:
             self.valor_anterior = linha.valor
             self.tentativas = 0
@@ -319,17 +298,17 @@ class RegiaoLobby:
         if seta is None:
             if not self._apontou:
                 self._apontou = True
-                return self._ordem(agora, "apontar", nome, linha.caixa)
+                return self._ordem(agora, "apontar", "pareamento", linha.caixa)
             if not linha.focada:
                 if not self._selecionou:
                     self._selecionou = True
-                    return self._ordem(agora, "clicar", f"selecionar_{nome}", linha.caixa)
+                    return self._ordem(agora, "clicar", "selecionar_pareamento", linha.caixa)
                 return None
         if linha.valor:
             self.visitados.add((self.sentido, linha.valor))
         self.tentativas += 1
         self.alterou = True
         if seta:
-            return self._ordem(agora, "clicar", nome, seta)
+            return self._ordem(agora, "clicar", "pareamento", seta)
         tecla = 0xE04D if self.sentido == "direita" else 0xE04B
-        return self._ordem(agora, "tecla", nome, tecla=tecla)
+        return self._ordem(agora, "tecla", "pareamento", tecla=tecla)

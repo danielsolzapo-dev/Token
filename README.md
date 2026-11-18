@@ -36,7 +36,7 @@ Em **Recompensas e webhook**, você pode ativar o resgate quando a tela de itens
 
 Marque **Notificar tesouros elementais encontrados** para receber avisos de descoberta no mesmo webhook. O alerta inclui uma captura do Fortnite e identifica o Acelerador de Extração, o Extrator Portátil, os Fogos de Artifício Dourados, o Localizador de Elementais ou o Localizador da Sorte quando o ícone está legível.
 
-Em **Regiões por horário**, ative a programação para Construção e Zero Build. O app usa Brasília (UTC−3) e tenta ajustar a região antes de entrar na fila pelo lobby. Das 00h às 06h, usa NA-Oeste. Das 06h às 11h, você pode escolher Ásia ou Oceania. Das 11h às 18h, usa Europa. Das 18h à meia-noite, você pode escolher Brasil, NA-Leste ou NA-Central. As preferências da América do Norte usam a subregião quando essa opção aparece no jogo. [Configurações de pareamento da Epic](https://www.epicgames.com/help/c-ategory_fortnite/c-fortnite_gameplay/a10221394)
+Em **Regiões por horário**, ative a programação para Construção e Zero Build. O app usa Brasília (UTC−3) e tenta ajustar a região antes de entrar na fila pelo lobby. Das 00h às 06h, usa América do Norte. Das 06h às 11h, você pode escolher Ásia ou Oceania. Das 11h às 18h, usa Europa. Das 18h à meia-noite, você pode escolher Brasil ou América do Norte. A preferência de sub-região fica a cargo da configuração do Fortnite. [Configurações de pareamento da Epic](https://www.epicgames.com/help/c-ategory_fortnite/c-fortnite_gameplay/a10221394)
 
 ## Enviar um diagnóstico
 

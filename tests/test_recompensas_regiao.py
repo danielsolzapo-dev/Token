@@ -1,15 +1,17 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from email.parser import BytesParser
 from email.policy import default
 import json
 from types import SimpleNamespace
 import unittest
-from dataclasses import replace
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 import cv2
 import numpy as np
 
+from app import carregar_config
 from logica_autofarm import Detector
 from regiao import AMERICA_DO_NORTE, LinhaRegiao, RegiaoLobby, TelaRegiao, ler_tela_regiao, regiao_por_horario
 from texto_tela import Linha, identificar
@@ -110,11 +112,17 @@ class RegiaoTest(unittest.TestCase):
                          ("clicar", "abrir_configuracoes", tela.engrenagem))
 
     def test_programacao_usa_fuso_de_brasilia_e_preferencias(self):
-        for hora_utc, regiao in ((3, "NA-Oeste"), (8, "NA-Oeste"), (9, "Oceania"),
+        for hora_utc, regiao in ((3, AMERICA_DO_NORTE), (8, AMERICA_DO_NORTE), (9, "Oceania"),
                                  (13, "Oceania"), (14, "Europa"), (20, "Europa"),
-                                 (21, "NA-Central"), (2, "NA-Central")):
+                                 (21, AMERICA_DO_NORTE), (2, AMERICA_DO_NORTE)):
             instante = datetime(2026, 11, 17, hora_utc, tzinfo=timezone.utc)
             self.assertEqual(regiao_por_horario("Oceania", "NA-Central", instante), regiao)
+
+    def test_config_carrega_preferencia_antiga_como_america_do_norte(self):
+        for antiga in ("NA-Leste", "NA-Central", "NA-Oeste"):
+            with self.subTest(antiga=antiga), patch("app.CONFIG", Mock()) as config:
+                config.read_text.return_value = json.dumps({"regiao_noite": antiga, "regiao_auto": True})
+                self.assertEqual(carregar_config().regiao_noite, AMERICA_DO_NORTE)
 
     def test_le_rodape_ampliado_quando_configuracoes_nao_aparecem_no_ocr_geral(self):
         quadro = np.zeros((860, 1440, 3), np.uint8)
@@ -200,41 +208,34 @@ class RegiaoTest(unittest.TestCase):
         self.assertEqual((ordem.tipo, ordem.etapa, ordem.caixa), ("clicar", "fechar_configuracoes", voltar))
         self.assertEqual(fluxo.passo(TelaRegiao(), 16, lobby=True).tipo, "falhou")
 
-    def test_escolhe_subregiao_confirma_aplicar_e_volta_ao_lobby(self):
+    def test_escolhe_america_do_norte_aplica_e_volta_ao_lobby(self):
         fluxo = RegiaoLobby()
         caixa = (10, 20, 30, 40)
         self.assertEqual(fluxo.iniciar("NA-Oeste", 0).tipo, "esc")
         self.assertEqual(fluxo.passo(TelaRegiao(social=True, engrenagem=caixa), 1).etapa, "abrir_configuracoes")
         self.assertEqual(fluxo.passo(TelaRegiao(configuracoes=True, aba_jogo=caixa), 2).etapa, "abrir_aba_jogo")
-        norte = LinhaRegiao(caixa, AMERICA_DO_NORTE, direita=caixa)
-        auto = LinhaRegiao(caixa, "Automática")
-        oeste = LinhaRegiao(caixa, "NA-Oeste")
-        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=norte, subregiao=auto), 3).tipo, "apontar")
-        auto = LinhaRegiao(caixa, "Automática", direita=caixa)
-        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=norte, subregiao=auto), 4).etapa, "subregiao")
-        aplicar = fluxo.passo(TelaRegiao(pareamento=norte, subregiao=oeste, aplicar=caixa), 5)
+        outra = LinhaRegiao(caixa, "Europa", direita=caixa)
+        norte = LinhaRegiao(caixa, AMERICA_DO_NORTE)
+        subregiao = LinhaRegiao((504, 250, 160, 25), "Virginia", direita=(725, 250, 14, 18))
+        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=outra, subregiao=subregiao), 3).etapa, "pareamento")
+        aplicar = fluxo.passo(TelaRegiao(pareamento=norte, subregiao=subregiao, aplicar=caixa), 4)
         self.assertEqual((aplicar.tipo, aplicar.etapa, aplicar.tecla), ("tecla", "aplicar", 0x1E))
-        self.assertEqual(fluxo.passo(TelaRegiao(configuracoes=True, pareamento=norte, subregiao=oeste), 6).tipo, "esc")
-        self.assertEqual(fluxo.passo(TelaRegiao(social=True), 7).tipo, "esc")
-        self.assertEqual(fluxo.passo(TelaRegiao(), 8, lobby=True).tipo, "ok")
-        self.assertIsNone(fluxo.iniciar("NA-Oeste", 9))
+        self.assertEqual(fluxo.passo(TelaRegiao(configuracoes=True, pareamento=norte, subregiao=subregiao), 5).tipo, "esc")
+        self.assertEqual(fluxo.passo(TelaRegiao(social=True), 6).tipo, "esc")
+        self.assertEqual(fluxo.passo(TelaRegiao(), 7, lobby=True).tipo, "ok")
+        self.assertIsNone(fluxo.iniciar("NA-Oeste", 8))
 
-    def test_na_oeste_mantem_subregiao_quando_pareamento_fica_ilegivel(self):
+    def test_pareamento_ilegivel_nao_leva_a_mudar_subregiao(self):
         fluxo = RegiaoLobby()
         fluxo.iniciar("NA-Oeste", 0)
         caixa = (501, 188, 190, 25)
-        norte = LinhaRegiao(caixa, AMERICA_DO_NORTE, direita=caixa)
-        automatico = LinhaRegiao(caixa, "Automática")
-        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=norte, subregiao=automatico), 1).etapa, "subregiao")
-        ilegivel = LinhaRegiao(caixa, None, direita=caixa)
-        automatico_focado = LinhaRegiao(caixa, "Automática", direita=caixa, focada=True)
-        self.assertEqual(fluxo.passo(TelaRegiao(pareamento=ilegivel, subregiao=automatico_focado), 2).etapa,
-                         "subregiao")
-        oeste = LinhaRegiao(caixa, "NA-Oeste", focada=True)
-        tecla = fluxo.passo(TelaRegiao(pareamento=ilegivel, subregiao=oeste), 3)
-        self.assertEqual(tecla.tecla, 0x1E)
+        subregiao = LinhaRegiao(caixa, "Automática", direita=caixa, focada=True)
+        self.assertIsNone(fluxo.passo(TelaRegiao(configuracoes=True, subregiao=subregiao), 1))
+        norte = LinhaRegiao(caixa, AMERICA_DO_NORTE)
+        ordem = fluxo.passo(TelaRegiao(configuracoes=True, pareamento=norte, subregiao=subregiao), 2)
+        self.assertEqual(ordem.etapa, "fechar_configuracoes")
 
-    def test_na_oeste_aplica_so_depois_de_reconhecer_local_do_oeste(self):
+    def test_aplica_regiao_principal_com_subregiao_ilegivel(self):
         fluxo = RegiaoLobby()
         fluxo.iniciar("NA-Oeste", 0)
         escolha = (510, 256, 155, 26)
@@ -244,25 +245,13 @@ class RegiaoTest(unittest.TestCase):
                 Linha("nérica do Norte (135-205", (465, 187, 253, 26)),
                 Linha("Preferência de Subregião", (145, 256, 260, 25)),
                 Linha("AAPLICAR", aplicar)]
-        for agora, texto in enumerate(("Virginia", "Ohio", "Iowa", "Texas", "México", "OREG0N (205ms)"), 1):
-            linhas = [*base, Linha(texto, escolha), Linha("Preferência de Subregião", (817, 123, 250, 25))]
-            tela = ler_tela_regiao(linhas, 1440, 860)
-            self.assertEqual(tela.pareamento.valor, AMERICA_DO_NORTE)
-            self.assertEqual(tela.aplicar, aplicar)
-            if agora == 3:
-                ilegivel = replace(tela, subregiao=replace(tela.subregiao, valor=None))
-                self.assertIsNone(fluxo.passo(ilegivel, agora))
-            ordem = fluxo.passo(tela, agora)
-            self.assertEqual(ordem.etapa, "subregiao" if agora < 6 else "aplicar")
-        self.assertEqual(ordem.tecla, 0x1E)
-
-    def test_subregiao_ilegivel_le_apenas_a_opcao_com_faixa_branca(self):
-        quadro = np.zeros((860, 1440, 3), np.uint8)
-        quadro[585:615, 817:1143] = 250
-        linhas = [Linha("Texas (155ms)", (838, 510, 250, 22)),
-                  Linha("Norte da Califórnia (205ms)", (832, 590, 250, 22)),
-                  Linha("Oregon (205ms)", (838, 620, 250, 22))]
-        self.assertEqual(Detector._subregiao_destacada(quadro, linhas), "Norte da Califórnia")
+        tela = ler_tela_regiao([*base, Linha("rótulo ilegível", escolha)], 1440, 860)
+        self.assertEqual(tela.pareamento.valor, AMERICA_DO_NORTE)
+        self.assertEqual(tela.aplicar, aplicar)
+        outra = replace(tela, pareamento=replace(tela.pareamento, valor="Europa", direita=escolha))
+        self.assertEqual(fluxo.passo(outra, 1).etapa, "pareamento")
+        ordem = fluxo.passo(tela, 2)
+        self.assertEqual((ordem.etapa, ordem.tecla), ("aplicar", 0x1E))
 
     def test_dialogo_salva_apenas_quando_regiao_desejada_foi_confirmada(self):
         linhas = [Linha("CONFIGURAÇÕES MODIFICADAS", (204, 216, 461, 40)),

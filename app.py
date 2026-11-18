@@ -23,7 +23,7 @@ from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao
 from diagnostico import Diagnostico
 from logica_autofarm import ACOES_AEREAS, BOTOES_FILA, Config, Detector, Fluxo, TECLAS, TEMPLATES
 from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
-from regiao import AMERICA_DO_NORTE, MANHA, NOITE, NORTE, regiao_por_horario
+from regiao import AMERICA_DO_NORTE, MANHA, NOITE, regiao_por_horario, regiao_principal
 from relogio_painel import RelogioPainel
 from tesouros import DetectorTesouros, monitorar_tesouros
 from versao import VERSAO
@@ -55,6 +55,7 @@ def carregar_config():
         ajustes = {chave: dados[chave] for chave in OPCOES if type(dados.get(chave)) is bool}
         if isinstance(dados.get("webhook_url"), str):
             ajustes["webhook_url"] = dados["webhook_url"]
+        dados["regiao_noite"] = regiao_principal(dados.get("regiao_noite"))
         for chave, permitido in (("regiao_manha", MANHA), ("regiao_noite", NOITE), ("aparencia", tuple(APARENCIAS))):
             if dados.get(chave) in permitido:
                 ajustes[chave] = dados[chave]
@@ -189,12 +190,10 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                         if fluxo.regiao.fechando is None or captura_regiao is None:
                             captura_regiao = quadro
                         principal, subregiao = tela.pareamento, tela.subregiao
-                        seletor = subregiao if (principal and principal.valor == AMERICA_DO_NORTE
-                                               and fluxo.regiao.alvo in NORTE) else principal
                         dados = (fluxo.regiao.alvo, tela.social, tela.configuracoes,
                                  principal.valor if principal else None, subregiao.valor if subregiao else None,
-                                 bool(seletor and seletor.focada), bool(seletor and seletor.esquerda),
-                                 bool(seletor and seletor.direita), bool(tela.aplicar), tela.dialogo_alteracoes)
+                                 bool(principal and principal.focada), bool(principal and principal.esquerda),
+                                 bool(principal and principal.direita), bool(tela.aplicar), tela.dialogo_alteracoes)
                         if dados != leitura_regiao_anterior:
                             leitura_regiao_anterior = dados
                             diagnostico.registrar("leitura_regiao", alvo=dados[0], social=dados[1],
@@ -665,7 +664,7 @@ class Painel:
         ttk.Label(painel, text="Horário de Brasília · Construção e Zero Build", style="Info.TLabel").grid(
             row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
         for linha, (faixa, controle) in enumerate((
-            ("00h–06h", ttk.Label(painel, text="NA-Oeste")),
+            ("00h–06h", ttk.Label(painel, text=AMERICA_DO_NORTE)),
             ("06h–11h", ttk.Combobox(painel, values=MANHA, textvariable=manha, state="readonly")),
             ("11h–18h", ttk.Label(painel, text="Europa")),
             ("18h–00h", ttk.Combobox(painel, values=NOITE, textvariable=noite, state="readonly")),
