@@ -10,16 +10,29 @@ MANHA = ("Ásia", "Oceania")
 NOITE = ("Brasil", "NA-Leste", "NA-Central")
 NORTE = {"NA-Leste", "NA-Central", "NA-Oeste"}
 AMERICA_DO_NORTE = "América do Norte"
+SUBREGIOES_NA = {
+    "NA-Leste": {"Virginia", "Ohio"},
+    "NA-Central": {"Iowa", "Texas"},
+    "NA-Oeste": {"Norte da Califórnia", "Oregon"},
+}
 NOMES = {
     "Automática": ("AUTOMATICA", "AUTOMATICO", "AUTO", "AUTOMATIC"),
     "Ásia": ("ASIA",),
     "Oceania": ("OCEANIA", "OCEANIC"),
     "Europa": ("EUROPA", "EUROPE"),
     "Brasil": ("BRASIL", "BRAZIL"),
-    AMERICA_DO_NORTE: ("AMERICA DO NORTE", "NORTH AMERICA", "NORTE", "JORTE", "NA"),
+    AMERICA_DO_NORTE: ("AMERICA DO NORTE", "MERICA DO NORTE", "NERICA DO NORTE",
+                       "NORTH AMERICA", "NORTE", "JORTE", "NA"),
     "NA-Leste": ("AN LESTE", "NA LESTE", "NA EAST", "LESTE", "EAST", "US EAST"),
     "NA-Central": ("AN CENTRAL", "NA CENTRAL", "CENTRAL", "US CENTRAL"),
     "NA-Oeste": ("AN OESTE", "NA OESTE", "NA WEST", "OESTE", "WEST", "US WEST"),
+    "Virginia": ("VIRGINIA",),
+    "Ohio": ("OHIO", "OHI0"),
+    "Iowa": ("IOWA",),
+    "Texas": ("TEXAS",),
+    "México": ("MEXICO",),
+    "Norte da Califórnia": ("NORTE DA CALIFORNIA", "NORTHERN CALIFORNIA"),
+    "Oregon": ("OREGON", "OREG0N"),
     "Oriente Médio": ("ORIENTE MEDIO", "MIDDLE EAST"),
 }
 
@@ -38,7 +51,7 @@ def regiao_por_horario(manha=MANHA[0], noite=NOITE[0], instante=None):
 def identificar_regiao(texto):
     from texto_tela import normalizar
 
-    valor = normalizar(re.split(r"\(|\d", texto, maxsplit=1)[0])
+    valor = normalizar(re.split(r"\(|\s+\d", texto, maxsplit=1)[0])
     return next((nome for nome, aliases in NOMES.items() if valor in aliases), None)
 
 
@@ -72,7 +85,8 @@ def ler_tela_regiao(linhas, largura, altura):
     rotulos = [(linha, normalizar(linha.texto)) for linha in linhas]
     rodape = [(linha, texto) for linha, texto in rotulos if linha.centro[1] >= 0.86 * altura]
     rodape_direito = [(linha, texto) for linha, texto in rodape if linha.centro[0] >= 0.60 * largura]
-    aplicar = next((l.caixa for l, t in rodape if t in {"APLICAR", "A APLICAR", "APPLY", "A APPLY"}), None)
+    aplicar = next((l.caixa for l, t in rodape
+                    if t in {"APLICAR", "A APLICAR", "AAPLICAR", "APPLY", "A APPLY", "AAPPLY"}), None)
     voltar = next((l.caixa for l, t in rodape if t in {"VOLTAR", "ESC VOLTAR", "BACK", "ESC BACK"}), None)
     restaurar = any(re.search(r"\b(?:RESTAURAR (?:O )?PADR(?:AO|A0)|RESTORE TO DEFAULT)\b", t)
                     for _, t in rodape_direito)
@@ -254,7 +268,8 @@ class RegiaoLobby:
             valor_principal = principal.valor if principal and principal.valor else self._pareamento_lido
             alvo_na = self.alvo in NORTE
             concluido = (valor_principal == self.alvo or
-                         (alvo_na and valor_principal == AMERICA_DO_NORTE and sub and sub.valor == self.alvo))
+                         (alvo_na and valor_principal == AMERICA_DO_NORTE and sub
+                          and (sub.valor == self.alvo or sub.valor in SUBREGIOES_NA[self.alvo])))
             if concluido:
                 if self.alterou and self.ultima_submissao is None:
                     self.ultima_submissao = agora
@@ -269,7 +284,7 @@ class RegiaoLobby:
                 return self._ordem(agora, "esc", "fechar_configuracoes")
             nome = "subregiao" if alvo_na and valor_principal == AMERICA_DO_NORTE else "pareamento"
             linha = sub if nome == "subregiao" else principal
-            if linha is None:
+            if linha is None or (nome == "subregiao" and linha.valor is None):
                 return None
             ordem = self._ajustar(agora, nome, linha)
             if ordem and nome == "pareamento" and ordem.etapa == nome and ordem.tipo in ("clicar", "tecla"):

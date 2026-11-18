@@ -4,6 +4,7 @@ from email.policy import default
 import json
 from types import SimpleNamespace
 import unittest
+from dataclasses import replace
 from urllib.error import HTTPError
 
 import cv2
@@ -232,6 +233,36 @@ class RegiaoTest(unittest.TestCase):
         oeste = LinhaRegiao(caixa, "NA-Oeste", focada=True)
         tecla = fluxo.passo(TelaRegiao(pareamento=ilegivel, subregiao=oeste), 3)
         self.assertEqual(tecla.tecla, 0x1E)
+
+    def test_na_oeste_aplica_so_depois_de_reconhecer_local_do_oeste(self):
+        fluxo = RegiaoLobby()
+        fluxo.iniciar("NA-Oeste", 0)
+        escolha = (510, 256, 155, 26)
+        aplicar = (800, 800, 128, 36)
+        base = [Linha("Idioma e Região", (125, 123, 248, 32)),
+                Linha("Região de Pareamento", (144, 188, 236, 25)),
+                Linha("nérica do Norte (135-205", (465, 187, 253, 26)),
+                Linha("Preferência de Subregião", (145, 256, 260, 25)),
+                Linha("AAPLICAR", aplicar)]
+        for agora, texto in enumerate(("Virginia", "Ohio", "Iowa", "Texas", "México", "OREG0N (205ms)"), 1):
+            linhas = [*base, Linha(texto, escolha), Linha("Preferência de Subregião", (817, 123, 250, 25))]
+            tela = ler_tela_regiao(linhas, 1440, 860)
+            self.assertEqual(tela.pareamento.valor, AMERICA_DO_NORTE)
+            self.assertEqual(tela.aplicar, aplicar)
+            if agora == 3:
+                ilegivel = replace(tela, subregiao=replace(tela.subregiao, valor=None))
+                self.assertIsNone(fluxo.passo(ilegivel, agora))
+            ordem = fluxo.passo(tela, agora)
+            self.assertEqual(ordem.etapa, "subregiao" if agora < 6 else "aplicar")
+        self.assertEqual(ordem.tecla, 0x1E)
+
+    def test_subregiao_ilegivel_le_apenas_a_opcao_com_faixa_branca(self):
+        quadro = np.zeros((860, 1440, 3), np.uint8)
+        quadro[585:615, 817:1143] = 250
+        linhas = [Linha("Texas (155ms)", (838, 510, 250, 22)),
+                  Linha("Norte da Califórnia (205ms)", (832, 590, 250, 22)),
+                  Linha("Oregon (205ms)", (838, 620, 250, 22))]
+        self.assertEqual(Detector._subregiao_destacada(quadro, linhas), "Norte da Califórnia")
 
     def test_dialogo_salva_apenas_quando_regiao_desejada_foi_confirmada(self):
         linhas = [Linha("CONFIGURAÇÕES MODIFICADAS", (204, 216, 461, 40)),
