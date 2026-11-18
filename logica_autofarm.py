@@ -473,18 +473,41 @@ class Detector:
             contornos, _ = cv2.findContours(verde, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for contorno in contornos:
                 x, y, w, h = cv2.boundingRect(contorno)
-                if not (10 <= h <= 60 and w >= 1.2 * h and x < 0.35 * largura and y > 0.4 * altura):
+                if not (10 <= h <= 60 and w >= 2 and x < 0.35 * largura and y > 0.4 * altura):
+                    continue
+                vida_baixa = w < 1.2 * h
+                if vida_baixa and not (x < 0.15 * largura and y > 0.73 * altura):
                     continue
                 barra = verde[y:y + h, x:x + w]
-                if cv2.countNonZero(barra) < 0.60 * w * h or hsv[y:y + h, x:x + w, 0].mean() >= 65:
+                if cv2.countNonZero(barra) < 0.60 * w * h:
                     continue
-                if _cruz_da_vida(branco, x, y, h):
+                if not vida_baixa and hsv[y:y + h, x:x + w, 0].mean() >= 65:
+                    continue
+                cruz = _cruz_da_vida(branco, x, y, h)
+                if not cruz:
+                    # Fundos claros podem ligar a cruz ao cenário na primeira máscara.
+                    if branco_claro is None:
+                        branco_claro = cv2.inRange(hsv, (0, 0, 220), (180, 85, 255))
+                    cruz = _cruz_da_vida(branco_claro, x, y, h)
+                if cruz and (not vida_baixa or self._sobrescudo_no_hud(hsv, x, y, h)):
                     return True
-                # Fundos claros podem ligar a cruz ao cenário na primeira máscara.
-                if branco_claro is None:
-                    branco_claro = cv2.inRange(hsv, (0, 0, 220), (180, 85, 255))
-                if _cruz_da_vida(branco_claro, x, y, h):
-                    return True
+        return False
+
+    @staticmethod
+    def _sobrescudo_no_hud(hsv, x, y, altura_vida):
+        # Com pouca vida, exige também o ícone ciano alinhado à direita da barra.
+        h = altura_vida
+        regiao = hsv[max(0, y - h):y + 2 * h, x + 7 * h:x + 17 * h]
+        if not regiao.size:
+            return False
+        ciano = cv2.inRange(regiao, (85, 100, 125), (104, 255, 255))
+        contornos, _ = cv2.findContours(ciano, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for contorno in contornos:
+            _, topo, largura, altura = cv2.boundingRect(contorno)
+            if (0.8 * h <= altura <= 1.7 * h and 0.75 * altura <= largura <= 1.35 * altura
+                    and topo + altura / 2 <= 1.65 * h
+                    and cv2.contourArea(contorno) >= 0.52 * largura * altura):
+                return True
         return False
 
     def barras_esquadrao(self, quadro):

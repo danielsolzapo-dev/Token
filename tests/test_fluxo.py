@@ -634,6 +634,20 @@ class DetectorTest(unittest.TestCase):
         quadro[479:482, 23:30] = 255
         self.assertTrue(detector.em_partida(quadro.copy()))
 
+    def test_hud_com_um_de_vida_exige_cruz_e_sobrescudo(self):
+        detector = Detector()
+        quadro = np.zeros((1080, 1810, 3), dtype=np.uint8)
+        quadro[999:1025, 56:61] = (0, 215, 145)
+        quadro[1006:1018, 46:50] = 255
+        quadro[1010:1014, 42:54] = 255
+        self.assertFalse(detector.em_partida(quadro))
+        escudo = np.array(((365, 991), (383, 985), (400, 991), (398, 1008),
+                           (383, 1020), (367, 1008)), dtype=np.int32)
+        cv2.fillConvexPoly(quadro, escudo, (255, 235, 10))
+        self.assertTrue(detector.em_partida(quadro.copy()))
+        quadro[1006:1018, :54] = 0
+        self.assertFalse(detector.em_partida(quadro.copy()))
+
     def test_amarelo_sozinho_nao_autoriza_clique(self):
         quadro = np.zeros((540, 960, 3), dtype=np.uint8)
         quadro[225:270, 690:890] = (0, 255, 255)
