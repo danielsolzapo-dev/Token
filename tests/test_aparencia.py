@@ -30,7 +30,7 @@ class AparenciaTest(unittest.TestCase):
 
     def test_troca_pausado_e_rodando_preserva_controles_e_salva_escolha(self):
         painel = self.painel
-        self.assertEqual(carregar_config().aparencia, "mono")
+        self.assertEqual(carregar_config().aparencia, "azul")
         painel.minutos.set("6,75")
         painel.opcoes["anti_afk"].set(False)
         painel.total.set("12")
@@ -44,10 +44,12 @@ class AparenciaTest(unittest.TestCase):
         painel.botao.configure(text="Pausar")
         painel.botao_testar.state(["disabled"])
         relogio, eventos, sessao = painel.relogio, painel.eventos, painel.parar
-        for nome in ("mono", "rosa", "mono", "rosa"):
+        controles = painel.botao, painel.botao_testar, painel.botao_diagnostico
+        for nome in (*APARENCIAS, *APARENCIAS, "rosa"):
             self.selecionar(nome)
             self.assertEqual(painel.botao.cget("text"), "Pausar")
             self.assertTrue(painel.botao_testar.instate(["disabled"]))
+            self.assertEqual((painel.botao, painel.botao_testar, painel.botao_diagnostico), controles)
         self.assertEqual(painel.status.get(), "Em partida")
         self.assertEqual(painel.minutos.get(), "6,75")
         self.assertFalse(painel.opcoes["anti_afk"].get())
@@ -69,7 +71,7 @@ class AparenciaTest(unittest.TestCase):
     def test_atalhos_disparam_uma_vez_apos_varias_trocas(self):
         painel = self.painel
         agendados = self.janela.tk.call("after", "info")
-        for nome in ("rosa", "mono", "rosa", "mono"):
+        for nome in (*APARENCIAS, *APARENCIAS):
             self.selecionar(nome)
         self.assertEqual(self.janela.tk.call("after", "info"), agendados)
         painel.worker = Mock()

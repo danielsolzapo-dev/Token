@@ -272,6 +272,8 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 executada = acao is not None and (not tem_entrada or windows.executar(janela_entrada, acao, parar))
                 motivo = (windows.motivo_interrupcao(janela_entrada, parar)
                           if tem_entrada and not executada and (diagnostico or com_cursor) else None)
+                if motivo == "mouse_ou_teclado_em_uso":
+                    fluxo.aguardar_controles_livres(time.monotonic())
                 if diagnostico and tem_entrada:
                     metodo = ("mensagem_janela_cursor" if com_cursor else
                               "mensagem_janela" if em_fundo else "send_input")
@@ -411,7 +413,7 @@ class Painel:
         self.fechando = False
         self.f7_anterior = False
         self.status = tk.StringVar(janela, "Pausado")
-        self.atividade = tk.StringVar(janela, "Use Iniciar ou F6 para retomar")
+        self.atividade = tk.StringVar(janela, "Automação pausada. Use Iniciar ou F6 para retomar.")
         self.total = tk.StringVar(janela, "0")
         self.proxima_saida = tk.StringVar(janela, "—")
         self.farmando = tk.StringVar(janela, "—")
@@ -459,7 +461,7 @@ class Painel:
 
     def _ao_mapear(self, evento):
         if evento.widget is self.janela:
-            ajustar_titulo(self.janela, self.config.aparencia == "mono")
+            ajustar_titulo(self.janela, self.config.aparencia != "rosa")
 
     def _rolar(self, evento):
         if (isinstance(evento.widget, tk.Misc) and evento.widget.winfo_toplevel() is self.janela
@@ -488,7 +490,11 @@ class Painel:
         escolha = next((chave for chave, nome in APARENCIAS.items() if nome == self.aparencia.get()), self.config.aparencia)
         if escolha != self.config.aparencia:
             self.config = replace(self.config, aparencia=escolha)
-            self.montar(escolha)
+            self.tema.aplicar(escolha)
+            self.viewport.configure(background=self.tema.paleta.fundo)
+            ajustar_titulo(self.janela, escolha != "rosa")
+            self._pausado_visual = None
+            self.decorar_estado()
             self._salvar_preferencias()
 
     def _salvar_preferencias(self):
@@ -516,8 +522,10 @@ class Painel:
 
     def botao_com_icone(self, pai, nome, icone, comando, *, principal=False):
         cor = self.tema.paleta.texto_principal if principal else self.tema.paleta.texto
-        return ttk.Button(pai, text=nome, image=self.tema.icone(icone, cor), compound="left", command=comando,
-                          style="Start.TButton" if principal else "TButton")
+        botao = ttk.Button(pai, text=nome, image=self.tema.icone(icone, cor), compound="left", command=comando,
+                           style="Start.TButton" if principal else "TButton")
+        botao._icone_tema = icone
+        return botao
 
     def _estado_visual_botoes(self):
         if self.conteudo is None:
@@ -534,26 +542,20 @@ class Painel:
         cor = self.tema.paleta
         self.viewport.configure(background=cor.fundo)
         self.janela.configure(background=cor.fundo)
-        rosa = aparencia == "rosa"
-        self.janela.minsize(420 if rosa else 705, 345)
-        altura = min(810 if rosa else 550, int(self.janela.winfo_screenheight() * 0.9))
-        self.janela.geometry(f"{500 if rosa else 875}x{altura}")
-        ajustar_titulo(self.janela, not rosa)
+        self.janela.minsize(540, 345)
+        altura = min(900, int(self.janela.winfo_screenheight() * 0.9))
+        self.janela.geometry(f"620x{altura}")
+        ajustar_titulo(self.janela, aparencia != "rosa")
         self.conteudo = ttk.Frame(self.viewport)
         self._medidas_viewport = None
         self.janela_conteudo = self.viewport.create_window(0, 0, anchor="nw", window=self.conteudo)
         self.conteudo.bind("<Configure>", self._dimensionar_conteudo)
-        resumo = ttk.Frame(self.conteudo, style="Lateral.TFrame", padding=(20, 12 if rosa else 19))
-        operacoes = ttk.Frame(self.conteudo, padding=(16, 16))
-        if rosa:
-            resumo.pack(fill="x")
-            operacoes.pack(fill="x")
-        else:
-            resumo.configure(width=236)
-            resumo.pack(side="left", fill="y")
-            operacoes.pack(side="left", fill="both", expand=True)
-        self._montar_sessao(resumo, rosa)
-        self._montar_controles(operacoes, rosa)
+        resumo = ttk.Frame(self.conteudo, style="Lateral.TFrame", padding=(24, 18, 24, 0))
+        operacoes = ttk.Frame(self.conteudo, padding=(24, 12, 24, 20))
+        resumo.pack(fill="x")
+        operacoes.pack(fill="x")
+        self._montar_sessao(resumo)
+        self._montar_controles(operacoes)
         for nome, (texto, desativado) in estados.items():
             widget = getattr(self, nome)
             widget.configure(text=texto)
@@ -562,47 +564,42 @@ class Painel:
         self.decorar_estado()
         self.viewport.yview_moveto(0)
 
-    def _montar_sessao(self, resumo, rosa):
-        alinhamento = "center" if rosa else "w"
+    def _montar_sessao(self, resumo):
+        alinhamento = "w"
         ttk.Label(resumo, text="Auto Farm", style="Titulo.TLabel").pack(anchor=alinhamento)
-        ttk.Label(resumo, text=f"v{VERSAO} · Fortnite", style="LateralInfo.TLabel").pack(
-            anchor=alinhamento, pady=(1, 8 if rosa else 12))
+        ttk.Label(resumo, text=f"v{VERSAO}", style="LateralInfo.TLabel").pack(anchor=alinhamento)
+        ttk.Label(resumo, text="Fortnite · Fila, saída por tempo e movimento",
+                  style="LateralInfo.TLabel").pack(anchor=alinhamento, pady=(3, 12))
         ttk.Label(resumo, text="Aparência", style="LateralInfo.TLabel").pack(anchor=alinhamento, pady=(0, 3))
         seletor = ttk.Combobox(resumo, state="readonly", values=tuple(APARENCIAS.values()),
-                              textvariable=self.aparencia, width=22)
-        seletor.pack(anchor=alinhamento, pady=(0, 8 if rosa else 14))
+                              textvariable=self.aparencia, width=28)
+        seletor.pack(fill="x", pady=(0, 14))
         seletor.bind("<<ComboboxSelected>>", self.trocar_aparencia)
         estado = ttk.Frame(resumo, style="Lateral.TFrame")
         estado.pack(anchor=alinhamento)
         self.icone_estado = ttk.Label(estado, style="Lateral.TLabel")
         self.icone_estado.pack(side="left", padx=(0, 6))
         self.rotulo_estado = ttk.Label(estado, textvariable=self.status, style="Estado.TLabel",
-                                      wraplength=330 if rosa else 155)
+                                      wraplength=480)
         self.rotulo_estado.pack(side="left")
         ttk.Label(resumo, textvariable=self.atividade, style="LateralInfo.TLabel",
-                  wraplength=365 if rosa else 180, justify="center" if rosa else "left").pack(
-                      anchor=alinhamento, pady=(3, 7 if rosa else 12))
-        if rosa:
-            self._metrica(resumo, "Farmando", self.farmando, contagem="Tempo.TLabel").pack(pady=(0, 6))
-            linha = ttk.Frame(resumo, style="Lateral.TFrame")
-            linha.pack(fill="x")
-            for coluna, (nome, valor) in enumerate((("Partidas", self.total), ("Próxima saída", self.proxima_saida))):
-                linha.columnconfigure(coluna, weight=1, uniform="metricas")
-                self._metrica(linha, nome, valor, cartao=True).grid(
-                    row=0, column=coluna, sticky="ew", padx=(0, 8) if coluna == 0 else 0)
-        else:
-            for nome, valor in (("Partidas", self.total), ("Próxima saída", self.proxima_saida), ("Farmando", self.farmando)):
-                self._metrica(resumo, nome, valor).pack(fill="x", pady=(0, 10))
-            self.botao = self.botao_com_icone(resumo, "Iniciar", "play", self.alternar, principal=True)
-            self.botao.pack(fill="x", pady=(5, 0))
+                  wraplength=480, justify="left").pack(anchor=alinhamento, pady=(3, 12))
+        linha = ttk.Frame(resumo, style="Lateral.TFrame")
+        linha.pack(fill="x")
+        for coluna, (nome, valor) in enumerate((("Partidas", self.total),
+                                               ("Próxima saída", self.proxima_saida),
+                                               ("Farmando", self.farmando))):
+            linha.columnconfigure(coluna, weight=1, uniform="metricas")
+            self._metrica(linha, nome, valor, cartao=True).grid(
+                row=0, column=coluna, sticky="ew", padx=(0, 8) if coluna < 2 else 0)
 
     def _metrica(self, pai, legenda, variavel, *, cartao=False, contagem="Metrica.TLabel"):
-        area = ttk.Frame(pai, style="Card.TFrame" if cartao else "Lateral.TFrame", padding=(10, 4) if cartao else 0)
-        ttk.Label(area, text=legenda, style="CardInfo.TLabel" if cartao else "LateralInfo.TLabel").pack()
+        area = ttk.Frame(pai, style="Metrica.Card.TFrame" if cartao else "Lateral.TFrame", padding=(10, 8) if cartao else 0)
+        ttk.Label(area, text=legenda, style="MetricaInfo.TLabel" if cartao else "LateralInfo.TLabel").pack()
         ttk.Label(area, textvariable=variavel, style="MetricaCard.TLabel" if cartao else contagem).pack()
         return area
 
-    def _montar_controles(self, painel, rosa):
+    def _montar_controles(self, painel):
         automacao = ttk.Frame(painel, style="Card.TFrame", padding=(13, 10))
         automacao.pack(fill="x", pady=(0, 9))
         ttk.Label(automacao, text="Automação", style="Secao.TLabel").pack(anchor="w", pady=(0, 4))
@@ -623,16 +620,15 @@ class Painel:
         minutos = tuple(f"{passo / 2:g}".replace(".", ",") for passo in range(2, 121))
         ttk.Spinbox(campo, textvariable=self.minutos, values=minutos, width=8).pack(side="left", padx=(0, 8))
         ttk.Label(campo, text="1–60 min", style="CardInfo.TLabel").pack(side="left")
-        if rosa:
-            self.botao = self.botao_com_icone(painel, "Iniciar", "play", self.alternar, principal=True)
-            self.botao.pack(fill="x", pady=(0, 8))
+        self.botao = self.botao_com_icone(painel, "Iniciar", "play", self.alternar, principal=True)
+        self.botao.pack(fill="x", pady=(0, 8))
         ferramentas = ttk.Frame(painel)
         ferramentas.pack(fill="x")
         self.botao_testar = self.botao_com_icone(ferramentas, "Testar imagem", "imagem", self.testar)
         self.botao_diagnostico = self.botao_com_icone(ferramentas, "Copiar diagnóstico", "diagnostico", self.copiar_diagnostico)
         self._alinhar_botoes(ferramentas, self.botao_testar, self.botao_diagnostico)
-        ttk.Label(painel, text="F6  Iniciar/Pausar     F7  Marcar falha no diagnóstico",
-                  style="Info.TLabel", wraplength=360).pack(anchor="w", pady=(4, 9))
+        ttk.Label(painel, text="F6 inicia ou pausa\nF7 marca uma falha no diagnóstico durante a sessão",
+                  style="Info.TLabel", wraplength=480).pack(anchor="w", pady=(6, 12))
 
         atualizacao = ttk.Frame(painel, style="Card.TFrame", padding=(13, 10))
         atualizacao.pack(fill="x")
@@ -667,6 +663,8 @@ class Painel:
         janela = self.janela_regiao = tk.Toplevel(self.janela)
         janela.title("Regiões por horário")
         janela.transient(self.janela)
+        janela.configure(background=self.tema.paleta.fundo)
+        janela.bind("<Map>", lambda _: ajustar_titulo(janela, self.config.aparencia != "rosa"))
         painel = ttk.Frame(janela, padding=20)
         painel.pack(fill="both", expand=True)
         ativar = tk.BooleanVar(janela, self.config.regiao_auto)
@@ -707,6 +705,8 @@ class Painel:
         janela = self.janela_webhook = tk.Toplevel(self.janela)
         janela.title("Recompensas e webhook")
         janela.transient(self.janela)
+        janela.configure(background=self.tema.paleta.fundo)
+        janela.bind("<Map>", lambda _: ajustar_titulo(janela, self.config.aparencia != "rosa"))
         painel = ttk.Frame(janela, padding=20)
         painel.pack(fill="both", expand=True)
         resgatar = tk.BooleanVar(janela, self.config.resgatar_recompensas)
@@ -1059,6 +1059,8 @@ class Painel:
         janela = tk.Toplevel(self.janela)
         janela.title("Teste de imagem")
         janela.transient(self.janela)
+        janela.configure(background=self.tema.paleta.fundo)
+        janela.bind("<Map>", lambda _: ajustar_titulo(janela, self.config.aparencia != "rosa"))
         painel = ttk.Frame(janela, padding=14)
         painel.pack(fill="both", expand=True)
         ttk.Label(painel, text=texto).pack(anchor="w", pady=(0, 10))

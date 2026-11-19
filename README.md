@@ -10,7 +10,7 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 2. Deixe o Fortnite em primeiro plano, em modo janela ou tela cheia em janela, e clique em **Iniciar**. **F6** inicia ou pausa.
 3. Use **Testar imagem** para inspecionar um PNG, JPG ou BMP. O diagnóstico marca a caixa e o centro detectados e exibe método e score; essa função nunca envia teclado ou mouse.
 
-O seletor **Aparência** alterna entre **Preto e branco** e **Off-white e rosa bebê** durante a sessão. A escolha é restaurada na próxima abertura. Use a barra de rolagem para acessar o rodapé em janelas baixas.
+O seletor **Aparência** oferece **Padrão (Azul)**, **Escuro (Preto)**, **Oceano (Azul-marinho)**, **Claro (Rosa bebê)**, **Floresta (Verde escuro)**, **Pôr do sol (Roxo)** e **Abóbora (Halloween)**. A troca é imediata durante a sessão e a escolha é restaurada na próxima abertura. A primeira abertura usa Padrão (Azul). Use a barra de rolagem para acessar o rodapé em janelas baixas.
 
 O app procura **Jogar Novamente**, **Continuar** e os botões do lobby. A detecção usa imagens de referência em múltiplas escalas; a alternativa amarelo+OCR para **Jogar Novamente** só aceita o rótulo dentro do controle. A leitura em português ou inglês identifica fila e diálogo de saída, e não confirma quando há mais de um diálogo plausível.
 

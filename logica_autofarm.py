@@ -71,7 +71,7 @@ class Config:
     regiao_auto: bool = False
     regiao_manha: str = MANHA[0]
     regiao_noite: str = NOITE[0]
-    aparencia: str = "mono"
+    aparencia: str = "azul"
 
 
 @dataclass(frozen=True)
@@ -725,6 +725,13 @@ class Fluxo:
         else:
             self._prazo_menu = agora + 10
 
+    def aguardar_controles_livres(self, agora):
+        if self._prazo_menu is not None:
+            self._prazo_menu = agora + 10
+        if self.regiao.alvo is not None and self.regiao.fechando is None:
+            self.regiao._ultima_mudanca = agora
+            self.regiao.prazo = max(self.regiao.prazo, agora + 15)
+
     def _procurar(self, quadro, *nomes):
         return self.detector.procurar(quadro, nomes)
 
@@ -909,7 +916,8 @@ class Fluxo:
             origem = Alvo(f"regiao_{ordem.etapa}", 1.0, (0, 0, 0, 0), None)
             return Acao("tecla_regiao", origem, passos=(("teclas", (ordem.tecla,), 0.07),))
         if ordem.caixa:
-            return Acao(ordem.tipo, Alvo(f"regiao_{ordem.etapa}", 1.0, ordem.caixa, None))
+            return Acao(ordem.tipo, Alvo(f"regiao_{ordem.etapa}", 1.0, ordem.caixa, None),
+                        tentativa=ordem.tentativa)
         if ordem.tipo == "esc":
             return Acao("esc", Alvo(f"regiao_{ordem.etapa}", 1.0, (0, 0, 0, 0), None))
         return Acao(f"regiao_{ordem.tipo}", Alvo(alvo, 1.0, (0, 0, 0, 0), None))

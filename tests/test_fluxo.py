@@ -322,6 +322,20 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(16.6, partida=True).tipo, "movimento")
         self.assertEqual(self.passo(21.2, partida=True).tipo, "esc")
 
+    def test_saida_aguarda_mouse_livre_sem_expirar_menu(self):
+        self.fluxo._iniciar_partida(0)
+        self.assertEqual(self.passo(6, partida=True).tipo, "esc")
+        self.assertIsNone(self.passo(7.1, "menu_aba", cursor=True))
+        acao = self.passo(7.4, "menu_aba", cursor=True, enviado=False)
+        self.assertEqual(acao.alvo.nome, "menu_aba")
+        for instante in (15, 24, 33):
+            self.fluxo.aguardar_controles_livres(instante)
+            self.assertIsNone(self.passo(instante, "menu_aba", cursor=True))
+            self.assertEqual(self.passo(instante + 0.2, "menu_aba", cursor=True, enviado=False).tipo, "clicar")
+        self.assertIsNone(self.passo(34, "menu_aba", cursor=True))
+        acao = self.passo(34.2, "menu_aba", cursor=True)
+        self.assertEqual((acao.alvo.nome, acao.tentativa), ("menu_aba", 0))
+
     def test_hud_intermitente_so_mantem_movimento_por_poucos_segundos(self):
         self.habilitar_movimento()
         self.fluxo._iniciar_partida(0)

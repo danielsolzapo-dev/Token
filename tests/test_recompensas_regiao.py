@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 
 from app import carregar_config
-from logica_autofarm import Detector
+from logica_autofarm import Detector, Fluxo
 from regiao import AMERICA_DO_NORTE, LinhaRegiao, RegiaoLobby, TelaRegiao, ler_tela_regiao, regiao_por_horario
 from texto_tela import Linha, identificar
 from webhook import ErroWebhook, enviar_webhook, validar_url
@@ -76,6 +76,17 @@ class WebhookTest(unittest.TestCase):
 
 
 class RegiaoTest(unittest.TestCase):
+    def test_clique_repetido_em_configuracoes_avanca_tentativa(self):
+        fluxo = RegiaoLobby()
+        fluxo.iniciar("Oceania", 0)
+        caixa = (1155, 39, 30, 29)
+        social = TelaRegiao(social=True, engrenagem=caixa)
+        self.assertEqual(fluxo.passo(social, 1).tentativa, 0)
+        self.assertEqual(fluxo.passo(social, 2).tentativa, 1)
+        ordem = fluxo.passo(social, 3)
+        acao = Fluxo._acao_regiao(ordem, "Oceania")
+        self.assertEqual(acao.tentativa, 2)
+
     def test_lobby_reconhecido_abre_o_perfil_diretamente(self):
         detector = Detector()
         quadro = np.zeros((900, 1440, 3), np.uint8)

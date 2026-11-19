@@ -173,6 +173,7 @@ class OrdemRegiao:
     etapa: str
     caixa: tuple | None = None
     tecla: int | None = None
+    tentativa: int = 0
 
 
 class RegiaoLobby:
@@ -191,6 +192,8 @@ class RegiaoLobby:
         self._apontou = self._selecionou = False
         self._esc_social = 0
         self.ultima_tela = None
+        self._etapa_anterior = None
+        self._tentativas_etapa = 0
 
     def iniciar(self, alvo, agora, *, perfil=None):
         alvo = regiao_principal(alvo)
@@ -209,6 +212,8 @@ class RegiaoLobby:
         self._apontou = self._selecionou = False
         self._esc_social = 1
         self.ultima_tela = None
+        self._etapa_anterior = None
+        self._tentativas_etapa = 0
         if perfil:
             return OrdemRegiao("clicar", "abrir_social", perfil)
         return OrdemRegiao("esc", "abrir_social")
@@ -221,8 +226,12 @@ class RegiaoLobby:
         self.prazo = agora
 
     def _ordem(self, agora, tipo, etapa, caixa=None, tecla=None):
+        if etapa != self._etapa_anterior:
+            self._etapa_anterior, self._tentativas_etapa = etapa, 0
+        tentativa = self._tentativas_etapa
+        self._tentativas_etapa += 1
         self.proxima = agora + (0.65 if tipo == "apontar" else 0.85)
-        return OrdemRegiao(tipo, etapa, caixa, tecla)
+        return OrdemRegiao(tipo, etapa, caixa, tecla, tentativa)
 
     def _terminar(self, agora, ok):
         if ok:
