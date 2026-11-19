@@ -421,6 +421,17 @@ class Windows:
             return ponto.x, ponto.y
         return None
 
+    def _ativacao_clique_fundo(self, janela, ativo):
+        if not ativo and self.user.GetForegroundWindow() == janela.hwnd:
+            return True
+        mensagens = ((0x1C, 1), (0x06, 1), (0x07, 0)) if ativo else (
+            (0x08, 0), (0x06, 0), (0x1C, 0))
+        sucesso = True
+        for mensagem, valor in mensagens:
+            if not self._enviar_mouse_para_janela(janela, mensagem, valor, 0):
+                sucesso = False
+        return sucesso
+
     def _clicar_fundo_com_cursor(self, janela, parar, x, y, tentativa):
         if not self._cursor_parado():
             self._motivo_cursor_fundo = "mouse_ou_teclado_em_uso"
@@ -440,6 +451,11 @@ class Windows:
         tempo_ponteiro = 0.04 + 0.065 * passo
         tempo_pressionado = 0.035 + 0.04 * passo
         try:
+            if tentativa > 0 and not self._ativacao_clique_fundo(janela, True):
+                self._motivo_cursor_fundo = "ativacao_da_janela_recusada"
+                return False
+            if not self.disponivel(janela, parar):
+                return False
             if self._posicao_cursor() != destino:
                 return False
             if not self._enviar_mouse_para_janela(janela, 0x200, 0, dados):
@@ -453,6 +469,8 @@ class Windows:
                 liberado = self._enviar_mouse_para_janela(janela, 0x202, 0, dados)
             return bool(mantido and liberado)
         finally:
+            if tentativa > 0:
+                self._ativacao_clique_fundo(janela, False)
             if self._posicao_cursor() == destino:
                 self.user.SetCursorPos(*anterior)
 

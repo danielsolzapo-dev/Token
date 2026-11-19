@@ -1068,12 +1068,13 @@ class WindowsTest(unittest.TestCase):
             return True
         windows.user.GetClipCursor.side_effect = clip
         janela = Janela(42, (50, 70, 150, 170), pid_fundo=15, cursor_fundo=True)
-        acao = Acao("clicar", Alvo("lobby_jogar", 1, (20, 30, 20, 20), 1))
+        windows.user.GetForegroundWindow.return_value = 99
+        acao = Acao("clicar", Alvo("lobby_jogar", 1, (20, 30, 20, 20), 1), tentativa=1)
         self.assertFalse(windows.executar(janela, acao, Event()))
         self.assertEqual([chamada.args for chamada in windows.user.SetCursorPos.call_args_list],
                          [(80, 110), (500, 600)])
         self.assertEqual([chamada.args[1] for chamada in windows._enviar_mouse_para_janela.call_args_list],
-                         [0x200, 0x201, 0x202])
+                         [0x1C, 0x06, 0x07, 0x200, 0x201, 0x202, 0x08, 0x06, 0x1C])
         windows.user.SendInput.assert_not_called()
 
     def test_clique_de_fundo_espera_usuario_soltar_os_controles(self):
@@ -1087,6 +1088,21 @@ class WindowsTest(unittest.TestCase):
         self.assertEqual(windows._motivo_cursor_fundo, "mouse_ou_teclado_em_uso")
         windows.user.SetCursorPos.assert_not_called()
         windows.user.SendMessageTimeoutW.assert_not_called()
+
+    def test_ativacao_do_clique_nao_desativa_fortnite_que_voltou_ao_foco(self):
+        windows = self.criar_windows()
+        windows.user = Mock()
+        windows.user.GetForegroundWindow.return_value = 99
+        windows._enviar_mouse_para_janela = Mock(return_value=True)
+        janela = Janela(42, (0, 0, 100, 100), pid_fundo=15, cursor_fundo=True)
+        self.assertTrue(windows._ativacao_clique_fundo(janela, True))
+        self.assertTrue(windows._ativacao_clique_fundo(janela, False))
+        self.assertEqual([chamada.args[1:3] for chamada in windows._enviar_mouse_para_janela.call_args_list],
+                         [(0x1C, 1), (0x06, 1), (0x07, 0), (0x08, 0), (0x06, 0), (0x1C, 0)])
+        windows._enviar_mouse_para_janela.reset_mock()
+        windows.user.GetForegroundWindow.return_value = 42
+        self.assertTrue(windows._ativacao_clique_fundo(janela, False))
+        windows._enviar_mouse_para_janela.assert_not_called()
 
     def test_pausa_soltar_tecla_direcionada_a_janela_em_segundo_plano(self):
         windows = self.criar_windows()
