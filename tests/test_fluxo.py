@@ -26,6 +26,9 @@ class TelaSimulada:
     dialogo_ambiguo = False
     social = False
 
+    def personagem_derrubado(self, quadro):
+        return False
+
     def painel_social_lobby(self, quadro):
         return self.social
 
@@ -311,6 +314,14 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(29.5, "lobby_jogar", cursor=True).tipo, "clique_confirmado")
         self.assertIsNone(self.passo(30, "lobby_jogar", cursor=True))
         self.assertEqual(self.passo(30.3, "lobby_jogar", cursor=True).alvo.nome, "lobby_jogar")
+
+    def test_derrubado_aguarda_cronometro_e_sai_no_prazo(self):
+        self.fluxo.config = replace(self.fluxo.config, anti_afk=True)
+        self.fluxo._iniciar_partida(0)
+        self.assertIsNone(self.passo(0, partida=True))
+        self.assertIsNone(self.passo(2, derrubado=True))
+        self.assertEqual(self.fluxo.motivo_anti_afk, "derrubado")
+        self.assertEqual(self.passo(6, derrubado=True).tipo, "esc")
 
     def test_menu_nao_encontrado_permite_movimento_entre_tentativas_de_saida(self):
         self.habilitar_movimento()
@@ -638,6 +649,16 @@ class FluxoTest(unittest.TestCase):
 
 
 class DetectorTest(unittest.TestCase):
+    def test_barra_vermelha_exige_icone_de_derrubado(self):
+        detector = Detector()
+        quadro = np.zeros((1080, 1800, 3), dtype=np.uint8)
+        quadro[997:1028, 57:282] = (72, 29, 171)
+        self.assertFalse(detector.personagem_derrubado(quadro))
+        cv2.line(quadro, (40, 1006), (53, 1018), (255, 255, 255), 3)
+        cv2.line(quadro, (53, 1006), (40, 1018), (255, 255, 255), 3)
+        self.assertTrue(detector.personagem_derrubado(quadro))
+        self.assertFalse(detector.em_partida(quadro))
+
     def test_cruz_da_vida_em_fundo_claro(self):
         detector = Detector()
         quadro = np.zeros((540, 960, 3), dtype=np.uint8)

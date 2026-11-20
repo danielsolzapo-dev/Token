@@ -148,18 +148,20 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 bloqueio_hud = detector.procurar(quadro, ("espectador", "reinicializando"), 0.8)
                 if bloqueio_hud:
                     partida = False
+                derrubado = (fluxo.inicio_partida is not None and not partida and not bloqueio_hud
+                             and detector.personagem_derrubado(quadro))
                 if em_fundo:
-                    contexto_jogo = partida or bloqueio_hud or fluxo.embarque.em_transicao(time.monotonic())
+                    contexto_jogo = partida or bloqueio_hud or derrubado or fluxo.embarque.em_transicao(time.monotonic())
                     cursor = (fluxo.navegando_menu or not contexto_jogo
                               or bool(detector.procurar(quadro, ("menu_aba", "inventario"))))
                 else:
                     cursor = windows.cursor_visivel()
                 lendo_menu = cursor and fluxo.navegando_menu
-                alvo_onibus, score_onibus = (None, 0.0) if lendo_menu else detector.aviso_onibus(quadro)
+                alvo_onibus, score_onibus = (None, 0.0) if lendo_menu or derrubado else detector.aviso_onibus(quadro)
                 if parar.is_set():
                     break
                 onibus = bool(alvo_onibus)
-                alvo_asa, score_asa = detector.aviso_asa(quadro) if not (onibus or lendo_menu) else (None, 0.0)
+                alvo_asa, score_asa = detector.aviso_asa(quadro) if not (onibus or lendo_menu or derrubado) else (None, 0.0)
                 if parar.is_set():
                     break
                 asa_delta = bool(alvo_asa)
@@ -182,10 +184,11 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 etapa = "decidir"
                 acao = fluxo.passo(quadro, agora, partida=partida, cursor=cursor,
                                    no_onibus=onibus, hud_visivel=hud_visivel,
-                                   asa_delta=asa_delta, espectando=bool(bloqueio_hud))
+                                   asa_delta=asa_delta, espectando=bool(bloqueio_hud), derrubado=derrubado)
                 if parar.is_set():
                     break
-                if fluxo.inicio_partida is None or hud_visivel or onibus or asa_delta or bloqueio_hud or fluxo.navegando_menu:
+                if (fluxo.inicio_partida is None or hud_visivel or onibus or asa_delta
+                        or bloqueio_hud or derrubado or fluxo.navegando_menu):
                     hud_ausente_desde = None
                     perda_hud_registrada = False
                 elif fluxo.motivo_anti_afk == "hud_indisponivel":
@@ -211,13 +214,14 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                                                   configuracoes=dados[2], pareamento=dados[3], subregiao=dados[4],
                                                   foco_seletor=dados[5], seta_esquerda=dados[6],
                                                   seta_direita=dados[7], aplicar=dados[8], dialogo_alteracoes=dados[9])
-                leituras = (True, em_fundo, hud_visivel, partida, cursor, onibus, asa_delta, fluxo.motivo_anti_afk)
+                leituras = (True, em_fundo, hud_visivel, partida, cursor, onibus, asa_delta, derrubado, fluxo.motivo_anti_afk)
                 if diagnostico and (leituras != leituras_anteriores or agora >= proximo_registro):
                     diagnostico.registrar("leitura", foco=not em_fundo, segundo_plano=em_fundo,
                                           hud=hud_visivel, partida=partida,
                                           cursor=cursor, onibus=onibus, asa_delta=asa_delta,
                                           anti_afk=fluxo.motivo_anti_afk,
-                                          bloqueio_hud=bloqueio_hud.nome if bloqueio_hud else None,
+                                          bloqueio_hud=("derrubado" if derrubado else
+                                                       bloqueio_hud.nome if bloqueio_hud else None),
                                           score_onibus=round(score_onibus, 3),
                                           metodo_onibus=alvo_onibus.metodo if alvo_onibus else None,
                                           score_asa=round(score_asa, 3),
@@ -227,7 +231,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 if detector.dialogo_ambiguo and not dialogo_ambiguo_anterior:
                     eventos.put(("acao", "Confirmação de saída ambígua. Confira o jogo."))
                 dialogo_ambiguo_anterior = detector.dialogo_ambiguo
-                estado = ("Espectando" if bloqueio_hud else "No ônibus" if onibus else
+                estado = ("Derrubado" if derrubado else "Espectando" if bloqueio_hud else "No ônibus" if onibus else
                           "Descendo de asa-delta" if asa_delta else
                           "Descendo após o salto" if fluxo.motivo_anti_afk == "movimento_aereo" else
                           "Em partida" if partida else

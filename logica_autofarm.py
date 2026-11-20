@@ -510,6 +510,31 @@ class Detector:
                 return True
         return False
 
+    def personagem_derrubado(self, quadro):
+        imagem, _ = self.preparar(quadro, 1.0)
+        recorte, _, _ = _roi(imagem, (0, 0.89, 0.25, 0.97))
+        hsv = cv2.cvtColor(recorte, cv2.COLOR_BGR2HSV)
+        rosa = cv2.inRange(hsv, (165, 135, 100), (179, 255, 255))
+        vermelho = cv2.inRange(hsv, (0, 135, 100), (8, 255, 255))
+        mascara = cv2.bitwise_or(rosa, vermelho)
+        contornos, _ = cv2.findContours(mascara, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for x, y, largura, altura in map(cv2.boundingRect, contornos):
+            if not (30 <= x <= 90 and 12 <= altura <= 45 and 2 * altura <= largura <= 320):
+                continue
+            if cv2.countNonZero(mascara[y:y + altura, x:x + largura]) < 0.65 * largura * altura:
+                continue
+            icone = hsv[y:y + altura, max(0, x - 25):x]
+            branco = cv2.inRange(icone, (0, 0, 205), (180, 75, 255))
+            marcas, _ = cv2.findContours(branco, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for ix, iy, iw, ih in map(cv2.boundingRect, marcas):
+                if not (6 <= iw <= 24 and 6 <= ih <= 24 and abs(iy + ih / 2 - altura / 2) <= 7):
+                    continue
+                forma = cv2.resize(branco[iy:iy + ih, ix:ix + iw], (9, 9)) >= 128
+                if (forma.diagonal().mean() >= 0.55 and np.fliplr(forma).diagonal().mean() >= 0.55
+                        and forma[:2, 4].mean() <= 0.5):
+                    return True
+        return False
+
     def barras_esquadrao(self, quadro):
         """Conta pares de vida e escudo nas linhas pequenas acima do HUD próprio."""
         recorte, _, _ = _roi(quadro, (0.006, 0.69, 0.165, 0.90))
@@ -923,7 +948,7 @@ class Fluxo:
         return Acao(f"regiao_{ordem.tipo}", Alvo(alvo, 1.0, (0, 0, 0, 0), None))
 
     def passo(self, quadro, agora, *, partida=False, foco=True, cursor=False, no_onibus=False,
-              hud_visivel=None, asa_delta=False, espectando=False):
+              hud_visivel=None, asa_delta=False, espectando=False, derrubado=False):
         """Recebe imagem BGR e tempo monotônico em segundos. Retorna Acao ou None."""
         self.motivo_anti_afk = "outro_fluxo_ativo" if self.config.anti_afk else "desativado"
         if not foco:
@@ -931,7 +956,8 @@ class Fluxo:
             self.pausar()
             return None
         hud_visivel = partida if hud_visivel is None else hud_visivel
-        if cursor or no_onibus or asa_delta or espectando:
+        sem_controle = espectando or derrubado
+        if cursor or no_onibus or asa_delta or sem_controle:
             self._ultimo_hud_em_partida = None
         elif partida and self.inicio_partida is not None:
             self._ultimo_hud_em_partida = agora
@@ -940,7 +966,7 @@ class Fluxo:
         if agora < self._proxima_acao:
             self.motivo_anti_afk = "intervalo_entre_acoes"
             return None
-        if self.regiao.alvo is not None and not (partida or no_onibus or asa_delta or espectando):
+        if self.regiao.alvo is not None and not (partida or no_onibus or asa_delta or sem_controle):
             self.motivo_anti_afk = "ajustando_regiao"
             if not self.config.regiao_auto and self.regiao.fechando is None:
                 self.regiao.cancelar(agora)
@@ -958,12 +984,12 @@ class Fluxo:
         saiu_do_onibus = self.embarque.saltou_em is not None and not no_onibus
         descendo = saiu_do_onibus and self.embarque.em_transicao(agora)
         controle_aereo = (descendo and self.config.rotina_aerea
-                          and self.config.anti_afk and not cursor and not espectando
+                          and self.config.anti_afk and not cursor and not sem_controle
                           and self._prazo_menu is None and self._prazo_lobby is None)
         aereo_autorizado = onibus_novo or asa_delta or self.embarque.saltou_em is not None
         replay_na_tela = ((no_onibus or asa_delta) and self._pendente is None and self._prazo_fila is None
                           and self._procurar(quadro, "jogar", "continuar"))
-        if (self.config.rotina_aerea and aereo_autorizado and not espectando and not replay_na_tela
+        if (self.config.rotina_aerea and aereo_autorizado and not sem_controle and not replay_na_tela
                 and self._prazo_menu is None and self._prazo_lobby is None):
             fase = self.embarque.observar(onibus=onibus_novo, asa=asa_delta)
             if fase:
@@ -975,7 +1001,7 @@ class Fluxo:
         if (onibus_novo or asa_delta) and not replay_na_tela and self._pendente is None and self._prazo_fila is None:
             self.motivo_anti_afk = "aviso_de_onibus" if onibus_novo else "asa_delta"
             return self._mover_no_ar(quadro, agora, controle_aereo)
-        if saiu_do_onibus and partida and not espectando and not cursor:
+        if saiu_do_onibus and partida and not sem_controle and not cursor:
             if (descendo and self.inicio_partida is None and self._pendente is None and self._prazo_fila is None
                     and not self.navegando_menu and not replay_na_tela):
                 # O clique pode ter ficado sem confirmação mesmo quando o jogo
@@ -1022,7 +1048,7 @@ class Fluxo:
             if alvo:
                 return self._clicar_e_verificar(alvo, quadro)
         alvo = None
-        if (self.config.resgatar_recompensas and not (partida or espectando or no_onibus or asa_delta)
+        if (self.config.resgatar_recompensas and not (partida or sem_controle or no_onibus or asa_delta)
                 and (cursor or self._prazo_lobby is not None)):
             alvo = self.detector.recompensa(quadro)
         alvo = alvo or self.detector.detectar(quadro)
@@ -1036,7 +1062,7 @@ class Fluxo:
         if self._prazo_lobby is not None and agora >= self._prazo_lobby:
             self._prazo_lobby = None
             return Acao("lobby_nao_encontrado")
-        if not (self._fila_bloqueada or partida or espectando or no_onibus or asa_delta):
+        if not (self._fila_bloqueada or partida or sem_controle or no_onibus or asa_delta):
             alvo = self._procurar(quadro, *BOTOES_LOBBY)
         if alvo:
             self.inicio_partida = None
@@ -1076,7 +1102,7 @@ class Fluxo:
         if inventario_aberto:
             self._quadros_hud_afk = 0
             self._inicio_hud_novo = None
-        jogo_visivel = partida or espectando
+        jogo_visivel = partida or sem_controle
         if jogo_visivel:
             self._tentativas_saida_sem_hud = 0
         prazo_saida = self.prazo_saida
@@ -1108,8 +1134,9 @@ class Fluxo:
             return None
         if controle_aereo:
             return self._mover_no_ar(quadro, agora, controle_aereo)
-        if not (partida or hud_recente) or no_onibus or asa_delta or espectando:
-            self.motivo_anti_afk = ("espectando" if espectando else "aviso_de_onibus" if no_onibus
+        if not (partida or hud_recente) or no_onibus or asa_delta or sem_controle:
+            self.motivo_anti_afk = ("derrubado" if derrubado else "espectando" if espectando
+                                   else "aviso_de_onibus" if no_onibus
                                    else "asa_delta" if asa_delta else "hud_indisponivel")
             return None
         if self._movimento_exige_transicao:
