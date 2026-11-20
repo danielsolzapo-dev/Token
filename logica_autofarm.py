@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from embarque import Embarque
+from sobreviventes import Sobreviventes
 from regiao import MANHA, NOITE, RegiaoLobby, TelaRegiao, ler_tela_regiao, regiao_por_horario
 
 
@@ -73,6 +74,7 @@ class Config:
     regiao_noite: str = NOITE[0]
     aparencia: str = "azul"
     pausar_ao_obter_token: bool = False
+    sair_quando_sozinho: bool = True
 
 
 @dataclass(frozen=True)
@@ -639,11 +641,13 @@ class Fluxo:
         self.config = detector.config
         self.rng = rng if rng is not None else random.Random()
         self.partidas = 0
+        self.sobreviventes = Sobreviventes()
         self.regiao = RegiaoLobby()
         self.reconhecer_retorno_ao_lobby()
 
     def reconhecer_retorno_ao_lobby(self):
         """Um aviso de lobby confirmado encerra as ações pendentes da partida anterior."""
+        self.sobreviventes.reiniciar()
         if self.regiao.alvo is not None:
             self.regiao = RegiaoLobby()
         self.confirmacao = Confirmacao()
@@ -690,6 +694,7 @@ class Fluxo:
         self.embarque = Embarque()
 
     def pausar(self):
+        self.sobreviventes.reiniciar()
         self.confirmacao.limpar()
         self._quadros_sem_alvo = self._quadros_partida = self._leituras_fila = 0
         self._quadros_sem_hud = 0
@@ -703,6 +708,7 @@ class Fluxo:
         self.embarque.pausar()
 
     def _iniciar_partida(self, agora):
+        self.sobreviventes.reiniciar()
         self.inicio_partida = agora
         self._ultimo_hud_em_partida = agora
         self._repetir_saida_em = 0.0
@@ -865,6 +871,7 @@ class Fluxo:
         return Acao("clique_confirmado")
 
     def _iniciar_espera_fila(self, agora):
+        self.sobreviventes.reiniciar()
         self.inicio_partida = None
         self._prazo_lobby = None
         self._prazo_fila = agora + self.config.timeout_lobby
@@ -964,6 +971,12 @@ class Fluxo:
             return None
         hud_visivel = partida if hud_visivel is None else hud_visivel
         sem_controle = espectando or derrubado
+        observar_sobreviventes = (self.config.sair_quando_sozinho and partida and hud_visivel
+                                  and not (sem_controle or no_onibus or asa_delta or self.navegando_menu
+                                           or self._movimento_exige_transicao or self._prazo_fila is not None
+                                           or self.embarque.em_transicao(agora)))
+        if not observar_sobreviventes:
+            self.sobreviventes.interromper()
         if cursor or no_onibus or asa_delta or sem_controle:
             self._ultimo_hud_em_partida = None
         elif partida and self.inicio_partida is not None:
@@ -1073,6 +1086,7 @@ class Fluxo:
             alvo = self._procurar(quadro, *BOTOES_LOBBY)
         if alvo:
             self.inicio_partida = None
+            self.sobreviventes.reiniciar()
             self._sem_leitura_desde = None
             self._aviso_leitura = False
             if self.detector.painel_social_lobby(quadro):
@@ -1113,14 +1127,21 @@ class Fluxo:
         if jogo_visivel:
             self._tentativas_saida_sem_hud = 0
         prazo_saida = self.prazo_saida
-        if (prazo_saida is not None and agora >= max(prazo_saida, self._repetir_saida_em)
-                and not inventario_aberto and not no_onibus and not asa_delta):
+        tempo_esgotado = prazo_saida is not None and agora >= prazo_saida
+        motivo_sobreviventes = None
+        if inventario_aberto:
+            self.sobreviventes.interromper()
+        elif observar_sobreviventes and not tempo_esgotado:
+            motivo_sobreviventes = self.sobreviventes.verificar(quadro, agora)
+        if ((tempo_esgotado or motivo_sobreviventes) and agora >= self._repetir_saida_em
+                and not (inventario_aberto or no_onibus or asa_delta)):
             alvo_saida = self._procurar(quadro, "voltar_lobby") if cursor else None
             if cursor and jogo_visivel and alvo_saida is None:
                 alvo_saida = self._procurar(quadro, "menu_aba")
             pode_tentar_sem_hud = not cursor and self._tentativas_saida_sem_hud < 2
             if alvo_saida or jogo_visivel or pode_tentar_sem_hud:
-                self.motivo_anti_afk = "saida_por_tempo" if jogo_visivel else "saida_por_tempo_sem_hud"
+                self.motivo_anti_afk = motivo_sobreviventes or (
+                    "saida_por_tempo" if jogo_visivel else "saida_por_tempo_sem_hud")
                 self._prazo_menu = agora + 10
                 if alvo_saida:
                     return self._clicar_e_verificar(alvo_saida, quadro)

@@ -29,6 +29,25 @@ class AparenciaTest(unittest.TestCase):
         self.painel.aparencia.set(APARENCIAS[nome])
         self.painel.trocar_aparencia()
 
+    def test_saida_quando_sozinho_vem_ligada_e_persiste_ao_alternar_no_painel(self):
+        painel = self.painel
+        ajustes = Path(self.arquivos.name) / "ajustes.json"
+        ajustes.write_text('{"sair_por_tempo": false}', encoding="utf-8")
+        self.assertTrue(carregar_config().sair_quando_sozinho)
+        painel.fluxo = Mock(config=painel.config)
+        botoes = [widget for grupo in painel.conteudo.winfo_children()
+                  for card in grupo.winfo_children() for widget in card.winfo_children()
+                  if isinstance(widget, ttk.Checkbutton)]
+        switch = next(botao for botao in botoes
+                      if str(botao.cget("variable")) == str(painel.opcoes["sair_quando_sozinho"]))
+        self.assertTrue(switch.instate(["selected"]))
+        for habilitada in (False, True):
+            switch.invoke()
+            painel.salvamento.submit(lambda: None).result()
+            self.assertEqual(carregar_config().sair_quando_sozinho, habilitada)
+            self.assertEqual(painel.ler_opcoes().sair_quando_sozinho, habilitada)
+            self.assertEqual(painel.fluxo.config.sair_quando_sozinho, habilitada)
+
     def test_switch_pausar_token_salva_sem_url_e_atualiza_sessao(self):
         painel = self.painel
         (Path(self.arquivos.name) / "ajustes.json").write_text("{}", encoding="utf-8")

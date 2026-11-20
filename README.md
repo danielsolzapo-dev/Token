@@ -26,7 +26,7 @@ A rotina aérea opcional salta com **Espaço** após duas leituras do aviso do �
 
 O anti-AFK mantém **W** nas caminhadas e alterna diagonais com **A** e **D**. Com o cursor capturado e fora da transição aérea reconhecida, gira a câmera e envia dois cliques esquerdos com o item que já está na mão.
 
-O tempo padrão é 7,5 minutos. O painel sinaliza modo espectador e registra pares de barras de companheiros após três leituras estáveis, sem usar uma ausência de barras para decidir sair.
+O tempo padrão é 7,5 minutos. A opção **Voltar ao lobby se só eu restar no esquadrão ou na partida** vem ligada e funciona mesmo com a saída por tempo desligada. Com o seu personagem vivo, o app procura os indicadores de eliminação de todos os companheiros reconhecidos ou o número **1** ao lado do ícone de jogadores restantes. Três leituras consecutivas, separadas por pelo menos um segundo, iniciam a volta ao lobby. Se os nomes ou as barras apenas sumirem, o app continua na partida e aguarda uma leitura conclusiva.
 
 **Próxima saída** mostra a contagem regressiva do prazo usado pela saída automática. O painel mostra um traço quando a automação está pausada ou não há saída programada. **Farmando** soma o tempo ativo desde que o app foi aberto, incluindo lobby e fila, e congela durante as pausas.
 

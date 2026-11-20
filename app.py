@@ -38,7 +38,7 @@ CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
           "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto",
-          "segundo_plano", "cursor_segundo_plano", "pausar_ao_obter_token")
+          "segundo_plano", "cursor_segundo_plano", "pausar_ao_obter_token", "sair_quando_sozinho")
 CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite", "aparencia")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
@@ -109,6 +109,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None, *, lobby=None):
     proximo_esquadrao = 0.0
     candidato_esquadrao = contagem_esquadrao = None
     quadros_esquadrao = 0
+    leitura_equipe_anterior = None
     aguardando_foco = None
     hud_ausente_desde = None
     perda_hud_registrada = False
@@ -118,6 +119,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None, *, lobby=None):
         if diagnostico:
             diagnostico.registrar("sessao_iniciada", versao=VERSAO, anti_afk=fluxo.config.anti_afk,
                                   saida_por_tempo=fluxo.config.sair_por_tempo,
+                                  saida_quando_sozinho=fluxo.config.sair_quando_sozinho,
                                   segundo_plano=fluxo.config.segundo_plano,
                                   cursor_segundo_plano=fluxo.config.cursor_segundo_plano,
                                   minutos_partida=fluxo.config.minutos_partida)
@@ -145,6 +147,7 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None, *, lobby=None):
                 if parar.is_set():
                     break
                 if especial:
+                    fluxo.sobreviventes.interromper()
                     estado, acao, pausar = especial
                     aguardando_foco = None
                     if fluxo.prazo_saida != prazo_anterior:
@@ -223,6 +226,17 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None, *, lobby=None):
                                    asa_delta=asa_delta, espectando=bool(bloqueio_hud), derrubado=derrubado)
                 if parar.is_set():
                     break
+                sobreviventes = fluxo.sobreviventes
+                if sobreviventes.equipe is None:
+                    leitura_equipe_anterior = None
+                elif diagnostico and sobreviventes.ultima_amostra == agora:
+                    equipe = sobreviventes.equipe
+                    leitura = (equipe.presentes, equipe.vivos, equipe.eliminados, sobreviventes.jogadores == 1)
+                    if leitura != leitura_equipe_anterior or sobreviventes.confirmacoes == 3:
+                        diagnostico.registrar("sobreviventes", companheiros=equipe.presentes, vivos=equipe.vivos,
+                                              eliminados=equipe.eliminados, jogadores=sobreviventes.jogadores,
+                                              motivo=sobreviventes.motivo, confirmacoes=sobreviventes.confirmacoes)
+                        leitura_equipe_anterior = leitura
                 if (fluxo.inicio_partida is None or hud_visivel or onibus or asa_delta
                         or bloqueio_hud or derrubado or fluxo.navegando_menu):
                     hud_ausente_desde = None
@@ -278,6 +292,10 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None, *, lobby=None):
                     estado = "HUD da partida indisponível"
                 elif fluxo.motivo_anti_afk in ("saida_por_tempo", "saida_por_tempo_sem_hud", "aguardando_menu_de_saida"):
                     estado = "Saindo da partida"
+                elif fluxo.motivo_anti_afk == "ultimo_vivo_no_esquadrao":
+                    estado = "Saindo · último vivo do esquadrão"
+                elif fluxo.motivo_anti_afk == "ultimo_vivo_na_partida":
+                    estado = "Saindo · último vivo da partida"
                 elif fluxo.motivo_anti_afk == "ajustando_regiao":
                     estado = f"Ajustando região · {fluxo.regiao.alvo}" if fluxo.regiao.alvo else "Voltando ao lobby"
                 elif partida and contagem_esquadrao:
@@ -650,10 +668,13 @@ class Painel:
             ("anti_afk", "Ativar movimento anti-AFK"),
             ("rotina_aerea", "Saltar e fechar a asa-delta com Espaço"),
             ("sair_por_tempo", "Voltar ao lobby após o tempo da partida"),
+            ("sair_quando_sozinho", "Voltar ao lobby se só eu restar no esquadrão ou na partida"),
             ("segundo_plano", "Executar em segundo plano (experimental)"),
             ("cursor_segundo_plano", "Permitir mover o cursor nos cliques em segundo plano"),
         ):
-            ttk.Checkbutton(automacao, text=texto, variable=self.opcoes[nome], style=self.tema.switch).pack(fill="x")
+            comando = self.salvar_saida_quando_sozinho if nome == "sair_quando_sozinho" else None
+            ttk.Checkbutton(automacao, text=texto, variable=self.opcoes[nome], style=self.tema.switch,
+                            command=comando).pack(fill="x")
         ttk.Frame(automacao, style="Separador.TFrame").pack(fill="x", pady=6)
         campo = ttk.Frame(automacao, style="CardInterior.TFrame")
         campo.pack(fill="x")
@@ -846,6 +867,13 @@ class Painel:
         self._salvar_preferencias()
         if self.config.atualizar_auto:
             self.verificar_atualizacoes()
+
+    def salvar_saida_quando_sozinho(self):
+        habilitada = self.opcoes["sair_quando_sozinho"].get()
+        self.config = replace(self.config, sair_quando_sozinho=habilitada)
+        if self.fluxo is not None:
+            self.fluxo.config = replace(self.fluxo.config, sair_quando_sozinho=habilitada)
+        self._salvar_preferencias()
 
     def verificar_automaticamente(self):
         if self.fechando:

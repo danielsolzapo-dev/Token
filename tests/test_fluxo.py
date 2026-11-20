@@ -447,6 +447,76 @@ class FluxoTest(unittest.TestCase):
         self.assertEqual(self.passo(9.8, "confirmar_sair").alvo.nome, "confirmar_sair")
         self.assertEqual(self.fluxo.partidas, 0)
 
+    def test_ultimo_do_esquadrao_usa_saida_normal_sem_timer_desde_partida_manual(self):
+        self.fluxo.config = replace(self.fluxo.config, sair_por_tempo=False, anti_afk=False)
+        equipe = SimpleNamespace(presentes=2, vivos=2, eliminados=0)
+        self.fluxo.sobreviventes.contador = Mock()
+        self.fluxo.sobreviventes.contador.ler.return_value = 19
+        with patch("sobreviventes.ler_esquadrao", return_value=equipe):
+            self.assertIsNone(self.passo(0, partida=True))
+            self.assertIsNone(self.passo(1, partida=True))
+            equipe.vivos, equipe.eliminados = 0, 2
+            for instante in (2, 2.1, 2.2, 3):
+                self.assertIsNone(self.passo(instante, partida=True))
+            self.assertEqual(self.passo(4, partida=True).tipo, "esc")
+            self.assertEqual(self.fluxo.motivo_anti_afk, "ultimo_vivo_no_esquadrao")
+            self.assertIsNone(self.passo(5.1, "voltar_lobby", cursor=True))
+            self.assertEqual(self.passo(5.4, "voltar_lobby", cursor=True).alvo.nome, "voltar_lobby")
+            self.passo(7, "confirmar_sair", cursor=True)
+            self.passo(7.3, "confirmar_sair", cursor=True)
+            self.passo(7.6, "confirmar_sair", cursor=True)
+            self.assertEqual(self.passo(7.9, "confirmar_sair", cursor=True).alvo.nome, "confirmar_sair")
+        self.assertIsNone(self.fluxo.prazo_saida)
+
+    def test_ultimo_da_partida_exige_hud_proprio_vivo_e_opcao_ativa(self):
+        self.fluxo.sobreviventes.contador = Mock()
+        self.fluxo.sobreviventes.contador.ler.return_value = 1
+        with patch("sobreviventes.ler_esquadrao", return_value=SimpleNamespace(presentes=0, vivos=0, eliminados=0)):
+            self.assertIsNone(self.passo(0, partida=True))
+            self.assertIsNone(self.passo(1, partida=True))
+            for instante, contexto in enumerate(({"espectando": True}, {"derrubado": True},
+                                                 {"asa_delta": True}, {"hud_visivel": False}), 2):
+                self.passo(instante, partida=True, **contexto)
+                self.assertIsNone(self.fluxo._prazo_menu)
+            self.fluxo.config = replace(self.fluxo.config, sair_quando_sozinho=False)
+            for instante in range(6, 10):
+                self.passo(instante, partida=True)
+                self.assertIsNone(self.fluxo._prazo_menu)
+            self.fluxo.config = replace(self.fluxo.config, sair_quando_sozinho=True)
+            for instante in (10, 11):
+                self.assertIsNone(self.passo(instante, partida=True))
+            self.assertEqual(self.passo(12, partida=True).tipo, "esc")
+            self.assertEqual(self.fluxo.motivo_anti_afk, "ultimo_vivo_na_partida")
+
+    def test_equipe_parcial_ambigua_ou_reanimada_nao_dispara_saida(self):
+        self.fluxo.sobreviventes.contador = Mock()
+        self.fluxo.sobreviventes.contador.ler.return_value = 15
+        equipe = SimpleNamespace(presentes=3, vivos=3, eliminados=0)
+        with patch("sobreviventes.ler_esquadrao", return_value=equipe):
+            self.passo(0, partida=True)
+            for inicio, contagens in ((1, (2, 0, 2)), (5, (0, 0, 0)), (9, (3, 0, 2)), (13, (3, 1, 2))):
+                equipe.presentes, equipe.vivos, equipe.eliminados = contagens
+                for instante in range(inicio, inicio + 4):
+                    self.assertIsNone(self.passo(instante, partida=True))
+            equipe.vivos, equipe.eliminados = 0, 3
+            for instante in (17, 18):
+                self.passo(instante, partida=True)
+            self.passo(19, foco=False)
+            self.assertIsNone(self.passo(20, partida=True))
+            self.assertIsNone(self.passo(21, partida=True))
+            self.assertEqual(self.passo(22, partida=True).tipo, "esc")
+
+    def test_ilha_de_espera_interrompe_confirmacao_de_ultimo_jogador(self):
+        self.fluxo.sobreviventes.contador = Mock()
+        self.fluxo.sobreviventes.contador.ler.return_value = 1
+        equipe = SimpleNamespace(presentes=0, vivos=0, eliminados=0)
+        with patch("sobreviventes.ler_esquadrao", return_value=equipe), patch(
+                "sobreviventes.aguardando_jogadores", side_effect=[False, False, True, True, False, False, False]):
+            for instante in range(6):
+                self.assertIsNone(self.passo(instante, partida=True))
+            self.assertEqual(self.passo(6, partida=True).tipo, "esc")
+        self.assertIsNone(self.fluxo.prazo_saida)
+
     def test_timer_abre_menu_quando_hud_some_antes_do_prazo(self):
         self.fluxo.config = replace(self.fluxo.config, minutos_partida=6.5, timeout_lobby=90)
         self.fluxo._iniciar_partida(0)
