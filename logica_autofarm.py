@@ -72,6 +72,7 @@ class Config:
     regiao_manha: str = MANHA[0]
     regiao_noite: str = NOITE[0]
     aparencia: str = "azul"
+    pausar_ao_obter_token: bool = False
 
 
 @dataclass(frozen=True)
@@ -637,8 +638,15 @@ class Fluxo:
         self.detector = detector
         self.config = detector.config
         self.rng = rng if rng is not None else random.Random()
-        self.confirmacao = Confirmacao()
         self.partidas = 0
+        self.regiao = RegiaoLobby()
+        self.reconhecer_retorno_ao_lobby()
+
+    def reconhecer_retorno_ao_lobby(self):
+        """Um aviso de lobby confirmado encerra as ações pendentes da partida anterior."""
+        if self.regiao.alvo is not None:
+            self.regiao = RegiaoLobby()
+        self.confirmacao = Confirmacao()
         self.inicio_partida = None
         self._proxima_acao = 0.0
         self._repetir_clique_em = 0.0
@@ -680,7 +688,6 @@ class Fluxo:
         self._movimento_exige_transicao = False
         self.motivo_anti_afk = "aguardando_hud"
         self.embarque = Embarque()
-        self.regiao = RegiaoLobby()
 
     def pausar(self):
         self.confirmacao.limpar()

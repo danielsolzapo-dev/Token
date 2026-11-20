@@ -21,6 +21,7 @@ from PIL import Image, ImageGrab, ImageTk
 from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao,
                          criar_script_instalacao, iniciar_instalacao, preparar_executavel)
 from diagnostico import Diagnostico
+from lobby_especial import MonitorLobby
 from logica_autofarm import ACOES_AEREAS, BOTOES_FILA, Config, Detector, Fluxo, TECLAS, TEMPLATES
 from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, regiao_por_horario, regiao_principal
@@ -37,7 +38,7 @@ CONFIG = Path(os.getenv("LOCALAPPDATA", ".")) / "AutoFarmToken" / "ajustes.json"
 ARQUIVO_LOG = CONFIG.with_name("diagnostico.log")
 OPCOES = ("clicar_continuar", "fallback_cor", "sair_por_tempo", "anti_afk", "rotina_aerea",
           "atualizar_auto", "resgatar_recompensas", "notificar_tesouros", "regiao_auto",
-          "segundo_plano", "cursor_segundo_plano")
+          "segundo_plano", "cursor_segundo_plano", "pausar_ao_obter_token")
 CAMPOS = (*OPCOES, "minutos_partida", "webhook_url", "regiao_manha", "regiao_noite", "aparencia")
 ROTULOS = {
     "jogar": "Jogar Novamente", "continuar": "Continuar", "lobby_jogar": "Jogar",
@@ -94,7 +95,7 @@ def salvar_captura_diagnostico(quadro, diagnostico, evento, arquivo):
         diagnostico.registrar(evento, captura=f"debug/{arquivo}")
 
 
-def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
+def monitorar(windows, fluxo, eventos, parar, diagnostico=None, *, lobby=None):
     estado_anterior = acao_anterior = None
     dialogo_ambiguo_anterior = False
     leituras_anteriores = None
@@ -123,13 +124,15 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
         detector = fluxo.detector
         if faltando := TEMPLATES.keys() - detector.templates.keys():
             raise ValueError("Imagens de referência ausentes: " + ", ".join(sorted(faltando)))
+        if lobby is None:
+            lobby = MonitorLobby()
         while not parar.is_set():
             acao = None
             etapa = "capturar"
             segundo_plano = fluxo.config.segundo_plano
             janela = windows.localizar_fortnite() if segundo_plano else windows.fortnite_em_foco()
             em_fundo = bool(segundo_plano and janela and janela.pid_fundo)
-            if aguardando_foco and (em_fundo or not janela):
+            if aguardando_foco and not janela:
                 parar.wait(0.3)
                 continue
             quadro = None
@@ -137,6 +140,39 @@ def monitorar(windows, fluxo, eventos, parar, diagnostico=None):
                 quadro = windows.capturar(janela, parar) if em_fundo else windows.capturar(janela)
             pronto = quadro is not None and windows.disponivel(janela, parar)
             if pronto:
+                etapa = "avisos_lobby"
+                especial = lobby.passo(quadro, fluxo, eventos, diagnostico)
+                if parar.is_set():
+                    break
+                if especial:
+                    estado, acao, pausar = especial
+                    aguardando_foco = None
+                    if fluxo.prazo_saida != prazo_anterior:
+                        prazo_anterior = fluxo.prazo_saida
+                        eventos.put(("prazo_saida", prazo_anterior))
+                    hud_ausente_desde = None
+                    if estado != estado_anterior:
+                        eventos.put(("estado", estado))
+                        estado_anterior = estado
+                    if pausar:
+                        if diagnostico:
+                            diagnostico.registrar("pausa_solicitada", origem="token_loja_pirata")
+                        eventos.put(("pausa_token", parar))
+                        parar.set()
+                        break
+                    if acao is not None:
+                        etapa = "clicar_aviso_lobby"
+                        usar_cursor = em_fundo and fluxo.config.cursor_segundo_plano
+                        destino = replace(janela, cursor_fundo=True) if usar_cursor else janela
+                        enviado = windows.executar(destino, acao, parar)
+                        if diagnostico:
+                            diagnostico.registrar("clique_aviso_lobby", alvo=acao.alvo.nome,
+                                                  tentativa=acao.tentativa + 1, enviado=enviado)
+                    parar.wait(0.8 if lobby.restricao.ativa else 0.35)
+                    continue
+                if aguardando_foco and em_fundo:
+                    parar.wait(0.3)
+                    continue
                 if aguardando_foco:
                     alvo = aguardando_foco.alvo.nome if aguardando_foco.alvo else None
                     fluxo.rearmar_apos_foco(alvo, time.monotonic())
@@ -410,6 +446,7 @@ class Painel:
         self.diagnostico = diagnostico
         self.config = config if config is not None else carregar_config()
         self.fluxo = None
+        self.monitor_lobby = None
         self.eventos = SimpleQueue()
         self.eventos_atualizacao = SimpleQueue()
         self.release_disponivel = self.atualizacao_preparada = self.operacao_atualizacao = None
@@ -715,6 +752,7 @@ class Painel:
         painel.pack(fill="both", expand=True)
         resgatar = tk.BooleanVar(janela, self.config.resgatar_recompensas)
         tesouros = tk.BooleanVar(janela, self.config.notificar_tesouros)
+        pausar_token = tk.BooleanVar(janela, self.config.pausar_ao_obter_token)
         url = tk.StringVar(janela, self.config.webhook_url)
         item = tk.StringVar(janela, "Picareta de teste")
         mensagem = tk.StringVar(janela, "Este é um teste do Auto Farm.")
@@ -722,6 +760,8 @@ class Painel:
                         variable=resgatar).pack(anchor="w")
         ttk.Checkbutton(painel, text="Notificar tesouros elementais encontrados",
                         variable=tesouros).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(painel, text="Pausar ao obter o token da Loja Pirata", variable=pausar_token,
+                        style=self.tema.switch).pack(anchor="w", pady=(6, 0))
         ttk.Label(painel, text="URL do webhook (Discord ou compatível)").pack(anchor="w", pady=(12, 2))
         entrada = ttk.Entry(painel, textvariable=url, width=62, show="•")
         entrada.pack(fill="x")
@@ -732,7 +772,7 @@ class Painel:
         comandos = ttk.Frame(painel)
         comandos.pack(fill="x", pady=(12, 6))
         ttk.Button(comandos, text="Salvar", command=lambda: self.salvar_webhook(
-            url.get(), resgatar.get(), tesouros.get())).pack(side="left")
+            url.get(), resgatar.get(), tesouros.get(), pausar_token.get())).pack(side="left")
         self.botao_teste_webhook = ttk.Button(
             comandos, text="Testar com tela atual",
             command=lambda: self.testar_webhook(url.get(), item.get(), mensagem.get())
@@ -745,10 +785,12 @@ class Painel:
         ttk.Label(painel, textvariable=self.status_webhook, style="Info.TLabel",
                   wraplength=440).pack(anchor="w", pady=(6, 0))
 
-    def salvar_webhook(self, url, resgatar, tesouros=None):
+    def salvar_webhook(self, url, resgatar, tesouros=None, pausar_token=None):
         url = url.strip()
         tesouros = self.config.notificar_tesouros if tesouros is None else tesouros
-        alteracoes = dict(webhook_url=url, resgatar_recompensas=resgatar, notificar_tesouros=tesouros)
+        pausar_token = self.config.pausar_ao_obter_token if pausar_token is None else pausar_token
+        alteracoes = dict(webhook_url=url, resgatar_recompensas=resgatar, notificar_tesouros=tesouros,
+                          pausar_ao_obter_token=pausar_token)
         config = replace(self.config, **alteracoes)
         try:
             if url:
@@ -760,6 +802,7 @@ class Painel:
         self._salvar_preferencias()
         self.opcoes["resgatar_recompensas"].set(resgatar)
         self.opcoes["notificar_tesouros"].set(tesouros)
+        self.opcoes["pausar_ao_obter_token"].set(pausar_token)
         if self.fluxo is not None:
             self.fluxo.config = replace(self.fluxo.config, **alteracoes)
         self.status_webhook.set("Webhook salvo." if url else "Envio de webhook desativado.")
@@ -776,19 +819,21 @@ class Painel:
         self.janela.after(3000, lambda: self.iniciar_envio_webhook(
             url, nome=nome.strip() or "Picareta de teste", teste=True, mensagem=mensagem))
 
-    def iniciar_envio_webhook(self, url, nome, quadro=None, *, teste=False, mensagem="", tesouro=False):
-        Thread(target=self._enviar_webhook, args=(url, nome, quadro, teste, mensagem, tesouro), daemon=True).start()
+    def iniciar_envio_webhook(self, url, nome, quadro=None, *, teste=False, mensagem="", tesouro=False, aviso=None):
+        Thread(target=self._enviar_webhook, args=(url, nome, quadro, teste, mensagem, tesouro, aviso), daemon=True).start()
 
-    def _enviar_webhook(self, url, nome, quadro, teste, mensagem, tesouro):
+    def _enviar_webhook(self, url, nome, quadro, teste, mensagem, tesouro, aviso=None):
         try:
             if quadro is None:
                 jogo = self.windows.fortnite_em_foco()
                 quadro = (self.windows.capturar(jogo) if jogo else
                           cv2.cvtColor(np.asarray(ImageGrab.grab().convert("RGB")), cv2.COLOR_RGB2BGR))
-            enviar_webhook(url, quadro, nome, teste=teste, texto_teste=mensagem, tesouro=tesouro)
+            enviar_webhook(url, quadro, nome, teste=teste, texto_teste=mensagem, tesouro=tesouro, aviso=aviso)
             texto = "Teste enviado." if teste else "Recompensa enviada ao webhook."
             if tesouro:
                 texto = "Tesouro enviado ao webhook."
+            elif aviso:
+                texto = "Captura do aviso de banimento enviada." if aviso == "conta_banida" else "Captura do token enviada."
             sucesso = True
         except ErroWebhook as erro:
             texto, sucesso = str(erro), False
@@ -971,6 +1016,8 @@ class Painel:
             reduzir_prioridade_thread()
             if self.fluxo is None:
                 self.fluxo = Fluxo(Detector(config=self.config))
+            if self.monitor_lobby is None:
+                self.monitor_lobby = MonitorLobby()
             if parar.is_set():
                 return
             self.fluxo.config = self.fluxo.detector.config = self.config
@@ -978,7 +1025,7 @@ class Painel:
                 self.diagnostico.registrar("espera_fila_rearmada_por_iniciar")
             contexto = self.windows, self.fluxo, self.eventos, parar, self.diagnostico
             Thread(target=monitorar_tesouros, args=contexto, daemon=True).start()
-            monitorar(*contexto)
+            monitorar(*contexto, lobby=self.monitor_lobby)
         except (OSError, ValueError, cv2.error) as erro:
             self.eventos.put(("erro", f"Não foi possível iniciar a automação. {erro}"))
         finally:
@@ -1035,6 +1082,11 @@ class Painel:
 
     def _analisar_imagem(self, caminho, config):
         quadro = detectar_arquivo(caminho)
+        aviso = MonitorLobby().reconhecer(quadro)
+        if aviso:
+            if aviso.centro_botao:
+                cv2.drawMarker(quadro, aviso.centro_botao, (0, 0, 255), cv2.MARKER_CROSS, 15, 2)
+            return quadro, aviso.nome
         detector = Detector(config=config)
         alvo = detector.ler_contexto(quadro, "confirmar_sair")
         if alvo is None and not detector.dialogo_ambiguo:
@@ -1113,6 +1165,12 @@ class Painel:
                 url, nome, quadro = valor
                 if url == self.config.webhook_url:
                     self.iniciar_envio_webhook(url, nome, quadro)
+            elif evento == "aviso_webhook":
+                url, tipo, nome, quadro = valor
+                if url == self.config.webhook_url:
+                    self.iniciar_envio_webhook(url, nome, quadro, aviso=tipo)
+            elif evento == "pausa_token" and valor is self.parar:
+                self.atividade.set("Token da Loja Pirata desbloqueado. Automação pausada.")
             elif evento == "tesouro_webhook":
                 url, nome, quadro, sessao = valor
                 if (sessao is self.parar and not sessao.is_set() and self.config.notificar_tesouros
@@ -1159,6 +1217,7 @@ def verificar_build():
         raise RuntimeError("Captura de janela ausente no pacote.")
     detector = Detector()
     DetectorTesouros()
+    MonitorLobby()
     if faltando := TEMPLATES.keys() - detector.templates.keys():
         raise RuntimeError("Imagens ausentes no pacote: " + ", ".join(sorted(faltando)))
     for nome, (x, y) in (("jogar", (650, 210)), ("continuar", (650, 448)), ("lobby_pronto", (20, 420)),

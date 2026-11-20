@@ -2,6 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from unittest.mock import Mock, patch
 
@@ -27,6 +28,44 @@ class AparenciaTest(unittest.TestCase):
     def selecionar(self, nome):
         self.painel.aparencia.set(APARENCIAS[nome])
         self.painel.trocar_aparencia()
+
+    def test_switch_pausar_token_salva_sem_url_e_atualiza_sessao(self):
+        painel = self.painel
+        (Path(self.arquivos.name) / "ajustes.json").write_text("{}", encoding="utf-8")
+        self.assertFalse(carregar_config().pausar_ao_obter_token)
+        painel.fluxo = Mock(config=painel.config)
+        painel.mostrar_webhook()
+        formulario, = painel.janela_webhook.winfo_children()
+        switch = next(w for w in formulario.winfo_children() if isinstance(w, ttk.Checkbutton)
+                      and w.cget("text") == "Pausar ao obter o token da Loja Pirata")
+        salvar = next(b for linha in formulario.winfo_children() for b in linha.winfo_children()
+                      if isinstance(b, ttk.Button) and b.cget("text") == "Salvar")
+        self.assertFalse(switch.instate(["selected"]))
+        for ligada in (True, False):
+            switch.invoke()
+            salvar.invoke()
+            painel.salvamento.submit(lambda: None).result()
+            self.assertEqual(painel.fluxo.config.pausar_ao_obter_token, ligada)
+            self.assertEqual(carregar_config().pausar_ao_obter_token, ligada)
+            self.assertEqual(painel.opcoes["pausar_ao_obter_token"].get(), ligada)
+
+    def test_pausa_automatica_exibe_motivo_e_entrega_captura_ja_enfileirada(self):
+        painel = self.painel
+        url = "https://exemplo.invalid/webhook/teste"
+        painel.salvar_webhook(url, False)
+        painel.iniciar_envio_webhook = Mock()
+        painel.parar = Event()
+        painel.parar.set()
+        painel.worker = Mock()
+        painel.worker.is_alive.return_value = False
+        quadro = object()
+        painel.eventos.put(("aviso_webhook", (url, "token_loja_pirata", "Acesso à Loja Pirata", quadro)))
+        painel.eventos.put(("pausa_token", painel.parar))
+        painel.atualizar()
+        painel.iniciar_envio_webhook.assert_called_once_with(
+            url, "Acesso à Loja Pirata", quadro, aviso="token_loja_pirata")
+        self.assertEqual(painel.status.get(), "Pausado")
+        self.assertIn("Token da Loja Pirata", painel.atividade.get())
 
     def test_troca_pausado_e_rodando_preserva_controles_e_salva_escolha(self):
         painel = self.painel

@@ -36,6 +36,10 @@ Em **Recompensas e webhook**, você pode ativar o resgate quando a tela de itens
 
 Marque **Notificar tesouros elementais encontrados** para receber avisos de descoberta no mesmo webhook. O alerta inclui uma captura do Fortnite e identifica o Acelerador de Extração, o Extrator Portátil, os Fogos de Artifício Dourados, o Localizador de Elementais ou o Localizador da Sorte quando o ícone está legível.
 
+Quando a Loja Pirata é desbloqueada no lobby, o webhook recebe uma captura mesmo com o resgate automático desligado. Em **Recompensas e webhook**, ative **Pausar ao obter o token da Loja Pirata** para parar assim que o aviso aparecer. A opção começa desligada. A pausa mantém a recompensa na tela para conferência. Use F6 para retomar e seguir a preferência de resgate.
+
+Se aparecer **Esta conta foi banida**, o webhook recebe a captura do aviso. Durante a restrição, a sessão aguarda o Fortnite liberar **Jogar** ou **Pronto** para retomar a fila. Nas pesquisas **Queremos ouvir você!**, o app usa **Pular** quando identifica o botão na tela.
+
 Em **Regiões por horário**, ative a programação para Construção e Zero Build. O app usa Brasília (UTC−3) e tenta ajustar a região antes de entrar na fila pelo lobby. Das 00h às 06h, usa América do Norte. Das 06h às 11h, você pode escolher Ásia ou Oceania. Das 11h às 18h, usa Europa. Das 18h à meia-noite, você pode escolher Brasil ou América do Norte. A preferência de sub-região fica a cargo da configuração do Fortnite. [Configurações de pareamento da Epic](https://www.epicgames.com/help/c-ategory_fortnite/c-fortnite_gameplay/a10221394)
 
 ## Enviar um diagnóstico

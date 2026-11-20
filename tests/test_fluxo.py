@@ -942,7 +942,7 @@ class MonitorTest(unittest.TestCase):
         chamadas = [(janela, acao.tentativa) for janela, acao, _ in (
             chamada.args for chamada in windows.executar.call_args_list)]
         self.assertEqual(chamadas, [(fundo, 0), (fundo, 1), (fundo, 2), (foco, 0)])
-        self.assertEqual(windows.capturar.call_count, 7)
+        self.assertEqual(windows.capturar.call_count, 10)
         self.assertIn(("estado", "Fortnite sem resposta · volte ao jogo"),
                       [eventos.get_nowait() for _ in range(eventos.qsize())])
 

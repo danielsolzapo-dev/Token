@@ -36,7 +36,7 @@ def validar_url(url):
     return url
 
 
-def enviar_webhook(url, quadro, nome, *, teste=False, texto_teste="", tesouro=False, abrir=None):
+def enviar_webhook(url, quadro, nome, *, teste=False, texto_teste="", tesouro=False, aviso=None, abrir=None):
     url = validar_url(url)
     altura, largura = quadro.shape[:2]
     if max(altura, largura) > 1920:
@@ -52,6 +52,9 @@ def enviar_webhook(url, quadro, nome, *, teste=False, texto_teste="", tesouro=Fa
     titulo = "Teste de webhook" if teste else "Recompensa resgatada"
     if tesouro and not teste:
         titulo = "Tesouro elemental encontrado"
+    elif aviso and not teste:
+        titulo = {"conta_banida": "Aviso de banimento no Fortnite",
+                  "token_loja_pirata": "Token da Loja Pirata desbloqueado"}[aviso]
     nome = " ".join((nome or "Nome indisponível na captura").split())[:180]
     conteudo = f"{titulo} — {nome}"
     if teste and texto_teste.strip():
