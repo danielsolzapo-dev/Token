@@ -80,6 +80,7 @@ class AparenciaTest(unittest.TestCase):
         quadro = object()
         painel.eventos.put(("aviso_webhook", (url, "token_loja_pirata", "Acesso à Loja Pirata", quadro)))
         painel.eventos.put(("pausa_token", painel.parar))
+        self.janela.after_cancel(painel._callback_interface)
         painel.atualizar()
         painel.iniciar_envio_webhook.assert_called_once_with(
             url, "Acesso à Loja Pirata", quadro, aviso="token_loja_pirata")

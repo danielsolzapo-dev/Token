@@ -29,20 +29,24 @@ jobs:
       - run: python preparar_ocr.py
       - run: python -m unittest discover -s tests
       - run: python -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" --add-data "fontes;fontes" --add-data "leitor_replay/binario;leitor_replay/binario" app.py
+      - run: python -m PyInstaller --noconfirm --onefile --windowed --name EmissorLicencas emissor.py
       - shell: pwsh
         run: |
-          $smoke = Start-Process -FilePath "dist/AutoFarmTokenPirata.exe" -ArgumentList "--verificar-build" -WindowStyle Hidden -Wait -PassThru
-          exit $smoke.ExitCode
-      - shell: pwsh
-        run: |
-          $hash = (Get-FileHash "dist/AutoFarmTokenPirata.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
-          Set-Content -Path "dist/AutoFarmTokenPirata.exe.sha256" -Value "$hash  AutoFarmTokenPirata.exe" -Encoding ascii -NoNewline
+          foreach ($nome in 'AutoFarmTokenPirata.exe', 'EmissorLicencas.exe') {
+            $arquivo = Join-Path 'dist' $nome
+            $smoke = Start-Process -FilePath $arquivo -ArgumentList '--verificar-build' -WindowStyle Hidden -Wait -PassThru
+            if ($smoke.ExitCode -ne 0) { throw "Falha ao verificar $nome (código $($smoke.ExitCode))." }
+            $hash = (Get-FileHash $arquivo -Algorithm SHA256).Hash.ToLowerInvariant()
+            Set-Content -Path "$arquivo.sha256" -Value "$hash  $nome" -Encoding ascii -NoNewline
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: AutoFarmTokenPirata-Windows
           path: |
             dist/AutoFarmTokenPirata.exe
             dist/AutoFarmTokenPirata.exe.sha256
+            dist/EmissorLicencas.exe
+            dist/EmissorLicencas.exe.sha256
             dist/LeitorBaus-fonte.zip
       - if: github.ref_name == 'main' || startsWith(github.ref, 'refs/tags/v')
         env:
@@ -55,5 +59,5 @@ jobs:
           if ($env:BUILD_REF -ne 'main' -and $env:BUILD_REF -ne $tag) { throw "A tag e a versão do app precisam corresponder." }
           gh release view $tag --json tagName 2>$null
           if ($LASTEXITCODE -eq 0) { exit 0 }
-          gh release create $tag dist/AutoFarmTokenPirata.exe dist/AutoFarmTokenPirata.exe.sha256 dist/LeitorBaus-fonte.zip --target $env:GITHUB_SHA --title "Auto Farm $tag" --generate-notes
+          gh release create $tag dist/AutoFarmTokenPirata.exe dist/AutoFarmTokenPirata.exe.sha256 dist/EmissorLicencas.exe dist/EmissorLicencas.exe.sha256 dist/LeitorBaus-fonte.zip --target $env:GITHUB_SHA --title "Auto Farm $tag" --generate-notes
           exit $LASTEXITCODE

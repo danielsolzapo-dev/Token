@@ -6,7 +6,7 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 
 ## Uso
 
-1. Abra o executável e ajuste as opções antes de iniciar.
+1. Na tela **Ativar Auto Farm**, clique em **Copiar código** e envie o código ao vendedor. Quando receber sua licença, use **Colar chave** e **Ativar**. A ativação fica salva para a próxima abertura.
 2. Deixe o Fortnite em primeiro plano, em modo janela ou tela cheia em janela, e clique em **Iniciar**. **F6** inicia ou pausa.
 3. Use **Testar imagem** para inspecionar um PNG, JPG ou BMP. O diagnóstico marca a caixa e o centro detectados e exibe método e score; essa função nunca envia teclado ou mouse.
 
@@ -59,6 +59,16 @@ O registro fica em `%LOCALAPPDATA%\AutoFarmToken\diagnostico.log`, com até duas
 
 Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção depende da resolução, escala e idioma da interface do jogo e pode precisar de ajustes após atualizações do Fortnite. Confirme se automação de entradas é permitida pelas regras do jogo; não use o aplicativo se isso violar as regras ou políticas aplicáveis.
 
+## Emissão de licenças
+
+1. No Windows do vendedor, abra o [Emissor de Licenças](https://github.com/danielsolzapo-dev/Token/releases/latest/download/EmissorLicencas.exe). Na primeira utilização, use **Exportar backup**, escolha uma senha de pelo menos 12 caracteres e guarde o arquivo `.pem` em local separado do PC. Guarde também a senha em lugar seguro.
+2. Para cada venda, peça ao cliente o código que aparece ao abrir o Auto Farm. Cole-o no emissor e escolha a validade em dias ou **Vitalícia**.
+3. Clique em **Gerar licença**, depois em **Copiar licença** e envie a chave ao cliente em uma mensagem privada. O cliente faz a ativação no PC que gerou o código. Para renovar, emita outra licença para o mesmo código.
+
+A verificação funciona offline. Uma licença por prazo vale até o fim do dia indicado pelo emissor, conforme o relógio do Windows. Trocar de PC ou reinstalar o Windows pode mudar o código de ativação. Nesses casos, peça o novo código antes de reemitir a licença. Uma licença já entregue continua válida no PC original até vencer. Não há revogação remota.
+
+O Windows protege a chave de assinatura do vendedor no perfil que a criou. Para emitir licenças em outro Windows, abra o emissor, use **Restaurar backup** e informe a senha do arquivo exportado. Mantenha o backup e a senha sob seu controle. Quem possuir os dois poderá emitir licenças para este app.
+
 ## Desenvolvimento
 
 Use Python 3.14 e o SDK .NET 10.0.404 no Windows. Prepare os modelos OCR e compile o leitor de replays.
@@ -77,6 +87,7 @@ py -3.14 -m unittest discover -s tests -v
 py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py painel_tema.py regiao.py relogio_painel.py tesouros.py texto_tela.py webhook.py windows_game.py
 py -3.14 app.py --verificar-build
 py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" --add-data "fontes;fontes" --add-data "leitor_replay/binario;leitor_replay/binario" app.py
+py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name EmissorLicencas emissor.py
 ```
 
 A interface usa Inter 4.1. As fontes incluídas contêm o conjunto de caracteres do painel e a versão em negrito usa algarismos tabulares. A licença SIL OFL está em `fontes/LICENSE.txt`. [Projeto Inter](https://github.com/rsms/inter)

@@ -19,6 +19,13 @@ WM_HOTKEY = 0x0312
 MOD_NOREPEAT = 0x4000
 
 
+def configurar_dpi():
+    """Configura as coordenadas físicas antes de criar a primeira janela Tk."""
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.SetProcessDpiAwarenessContext.argtypes = [wintypes.HANDLE]
+    user.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+
+
 def reduzir_prioridade_thread():
     """Usa prioridade de fundo para a thread que chamou esta função."""
     if sys.platform != "win32":
@@ -125,8 +132,6 @@ class Windows:
             wintypes.HWND, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
         ]
         api = self.user
-        api.SetProcessDpiAwarenessContext.argtypes = [wintypes.HANDLE]
-        api.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
         api.GetForegroundWindow.restype = wintypes.HWND
         api.EnumWindows.argtypes = [self._callback_enumerar, wintypes.LPARAM]
         api.IsWindowVisible.argtypes = [wintypes.HWND]

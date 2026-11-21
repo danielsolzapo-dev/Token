@@ -8,6 +8,9 @@ botoes/
 ajustes.json
 partidas.json
 webhook_discord.txt
+licenca.txt
+*.dpapi
+*.pem
 *.tmp
 modelos/
 .token-update-*

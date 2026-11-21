@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
+from datetime import date
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,7 @@ from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao
 from diagnostico import Diagnostico
 from lobby_especial import MonitorLobby
 from logica_autofarm import ACOES_AEREAS, BOTOES_FILA, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from painel_ativacao import obter_licenca
 from painel_replay import JanelaBaus
 from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, regiao_por_horario, regiao_principal
@@ -30,7 +32,7 @@ from relogio_painel import RelogioPainel
 from tesouros import DetectorTesouros, monitorar_tesouros
 from versao import VERSAO
 from webhook import ErroWebhook, enviar_webhook, validar_url
-from windows_game import Windows, reduzir_prioridade_thread
+from windows_game import Windows, configurar_dpi, reduzir_prioridade_thread
 
 
 SOLTANDO_CONTROLES = "Soltando os controles da automação…"
@@ -460,8 +462,10 @@ def detectar_arquivo(caminho):
 
 
 class Painel:
-    def __init__(self, janela, windows, config=None, diagnostico=None):
+    def __init__(self, janela, windows, config=None, diagnostico=None, *, expira=None):
         self.janela, self.windows = janela, windows
+        self.expira = expira
+        self.licenca_expirada = False
         self.diagnostico = diagnostico
         self.config = config if config is not None else carregar_config()
         self.fluxo = None
@@ -628,7 +632,8 @@ class Painel:
     def _montar_sessao(self, resumo):
         alinhamento = "w"
         ttk.Label(resumo, text="Auto Farm", style="Titulo.TLabel").pack(anchor=alinhamento)
-        ttk.Label(resumo, text=f"v{VERSAO}", style="LateralInfo.TLabel").pack(anchor=alinhamento)
+        validade = f"Licença até {self.expira:%d/%m/%Y}" if self.expira else "Licença vitalícia"
+        ttk.Label(resumo, text=f"v{VERSAO} · {validade}", style="LateralInfo.TLabel").pack(anchor=alinhamento)
         ttk.Label(resumo, text="Fortnite · Fila, saída por tempo e movimento",
                   style="LateralInfo.TLabel").pack(anchor=alinhamento, pady=(3, 12))
         ttk.Label(resumo, text="Aparência", style="LateralInfo.TLabel").pack(anchor=alinhamento, pady=(0, 3))
@@ -1164,6 +1169,9 @@ class Painel:
         imagem.pack()
 
     def atualizar(self):
+        if self.expira and date.today() > self.expira and not self.fechando:
+            self.encerrar_por_vencimento()
+            return
         agora = time.monotonic()
         if agora - self._ultima_atualizacao >= 1:
             self._registrar_diagnostico("atraso_interface", segundos=round(agora - self._ultima_atualizacao, 2))
@@ -1252,6 +1260,19 @@ class Painel:
         self.relogio.pausar(time.monotonic())
         if self.parar:
             self.parar.set()
+
+    def encerrar_por_vencimento(self):
+        if not self.licenca_expirada:
+            self.licenca_expirada = True
+            self.fechar()
+            self.janela.withdraw()
+            for filha in self.janela.winfo_children():
+                if isinstance(filha, tk.Toplevel):
+                    filha.destroy()
+        if self.worker is not None and self.worker.is_alive():
+            self._callback_interface = self.janela.after(65, self.encerrar_por_vencimento)
+        else:
+            self.janela.destroy()
 
 
 def verificar_build():
@@ -1404,28 +1425,42 @@ def verificar_build():
     janela.destroy()
 
 
-def main():
-    carregar_inter()
-    if sys.argv[1:] == ["--verificar-build"]:
-        verificar_build()
-        return
+def executar_painel(janela, licenca):
     windows = Windows()
-    janela = tk.Tk()
     try:
         diagnostico = Diagnostico(ARQUIVO_LOG)
     except OSError:
         diagnostico = None
-    painel = Painel(janela, windows, diagnostico=diagnostico)
+    painel = Painel(janela, windows, diagnostico=diagnostico, expira=licenca.expira)
     if diagnostico is None:
         painel.atividade.set("O diagnóstico local não pôde ser criado.")
     try:
         windows.iniciar_atalho()
+        janela.deiconify()
         janela.mainloop()
     finally:
         windows.fechar_atalho()
         painel.salvamento.shutdown()
         if diagnostico:
             diagnostico.fechar()
+    return painel.licenca_expirada
+
+
+def main():
+    configurar_dpi()
+    carregar_inter()
+    if sys.argv[1:] == ["--verificar-build"]:
+        verificar_build()
+        return
+    while True:
+        janela = tk.Tk()
+        janela.withdraw()
+        licenca = obter_licenca(janela)
+        if licenca is None:
+            janela.destroy()
+            return
+        if not executar_painel(janela, licenca):
+            return
 
 
 if __name__ == "__main__":
