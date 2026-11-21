@@ -1,4 +1,6 @@
 from datetime import date, timedelta
+from pathlib import Path
+import tempfile
 from threading import Event
 from types import SimpleNamespace
 import tkinter as tk
@@ -8,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import app
 from painel_ativacao import JanelaAtivacao, obter_licenca
+from pedido_discord import ler_pedido
 
 
 class AtivacaoTest(unittest.TestCase):
@@ -49,6 +52,28 @@ class AtivacaoTest(unittest.TestCase):
             self.assertIs(obter_licenca(self.janela), validar.return_value)
             validar.assert_called_once_with("salva", "PC")
             tela.assert_not_called()
+
+    def test_arquivo_do_discord_importa_so_o_recibo_correspondente(self):
+        pc = "AB" * 16
+        tela = JanelaAtivacao(self.janela, pc)
+        with (tempfile.TemporaryDirectory() as pasta, patch("painel_ativacao.pasta_downloads", return_value=Path(pasta)),
+              patch("painel_ativacao.filedialog.asksaveasfilename", return_value=str(Path(pasta) / "pedido.json")),
+              patch("painel_ativacao.validar_chave") as validar, patch("painel_ativacao.salvar_chave") as salvar):
+            tela.gerar_arquivo()
+            pedido = ler_pedido((Path(pasta) / "pedido.json").read_bytes())
+            self.assertEqual(pedido.pc, pc)
+            (Path(pasta) / "licenca-autofarm-outro.txt").write_text("AFA1.outro")
+            caminho = Path(pasta) / pedido.nome_licenca
+            caminho.write_bytes(b"")
+            tela.after_cancel(tela.espera_arquivo)
+            tela._procurar_licenca()
+            salvar.assert_not_called()
+            caminho.write_text("AFA1.assinado")
+            tela.after_cancel(tela.espera_arquivo)
+            tela._procurar_licenca()
+            validar.assert_called_once_with("AFA1.assinado", pc)
+            salvar.assert_called_once_with("AFA1.assinado")
+            self.assertFalse(tela.winfo_exists())
 
     def test_chave_salva_expirada_oferece_renovacao_e_permite_cancelar(self):
         estado = []

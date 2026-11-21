@@ -1,12 +1,14 @@
 """Ativação da licença antes de abrir o painel do Auto Farm."""
 
 from concurrent.futures import Future
+from pathlib import Path
 from threading import Thread
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 import licenca
 from licenca import codigo_pc, ler_chave, salvar_chave, validar_chave
+from pedido_discord import ler_recibo, novo_pedido, pasta_downloads
 
 
 def _solicitar_ativacao(resultado, chave, pc):
@@ -25,6 +27,9 @@ class JanelaAtivacao(tk.Toplevel):
         self.licenca = None
         self.pedido = None
         self.agendamento = None
+        self.espera_arquivo = None
+        self.arquivos_esperados = ()
+        self.ultima_leitura = {}
         self.chave = tk.StringVar(self)
         self.aviso = tk.StringVar(self, aviso)
 
@@ -33,28 +38,82 @@ class JanelaAtivacao(tk.Toplevel):
         painel.columnconfigure(0, weight=1)
         ttk.Label(painel, text="Ativar Auto Farm", font=("Segoe UI", 16, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(painel, text="Cole a chave recebida do vendedor. A primeira ativação usa a internet "
-                  "e vincula a chave a este PC. Depois você pode usar o app offline.",
-                  wraplength=420).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 16))
-        ttk.Label(painel, text="Chave de licença").grid(row=2, column=0, sticky="w")
+        ttk.Label(painel, text="No Discord, clique em Ativar e envie a chave de compra e o arquivo "
+                  "deste PC. Baixe a licença que o bot devolver em Downloads.",
+                  wraplength=420).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 10))
+        self.botao_gerar = ttk.Button(painel, text="Gerar arquivo do PC", command=self.gerar_arquivo)
+        self.botao_gerar.grid(row=2, column=0, sticky="ew")
+        self.botao_abrir = ttk.Button(painel, text="Abrir licença recebida", command=self.abrir_licenca)
+        self.botao_abrir.grid(row=2, column=1, sticky="ew", padx=(8, 0))
+        ttk.Separator(painel).grid(row=3, column=0, columnspan=2, sticky="ew", pady=12)
+        ttk.Label(painel, text="Ativação direta por chave").grid(row=4, column=0, sticky="w")
         self.entrada = ttk.Entry(painel, textvariable=self.chave, width=38)
-        self.entrada.grid(row=3, column=0, sticky="ew", pady=(3, 4))
+        self.entrada.grid(row=5, column=0, sticky="ew", pady=(3, 4))
         self.botao_colar = ttk.Button(painel, text="Colar chave", command=self.colar)
-        self.botao_colar.grid(row=3, column=1, padx=(8, 0), pady=(3, 4), sticky="ew")
+        self.botao_colar.grid(row=5, column=1, padx=(8, 0), pady=(3, 4), sticky="ew")
         ttk.Label(painel, textvariable=self.aviso, wraplength=420).grid(
-            row=4, column=0, columnspan=2, sticky="w", pady=(4, 8))
+            row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.botao_ativar = ttk.Button(painel, text="Ativar neste PC", command=self.ativar)
-        self.botao_ativar.grid(row=5, column=0, columnspan=2, sticky="ew")
+        self.botao_ativar.grid(row=6, column=0, columnspan=2, sticky="ew")
         ttk.Button(painel, text="Copiar código do PC para emissão offline", command=self.copiar).grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(12, 0))
+            row=7, column=0, columnspan=2, sticky="w", pady=(10, 0))
         self.entrada.bind("<Return>", lambda _: self.ativar())
         self.entrada.focus_set()
 
     def destroy(self):
+        if self.espera_arquivo is not None:
+            self.after_cancel(self.espera_arquivo)
+            self.espera_arquivo = None
         if self.agendamento is not None:
             self.after_cancel(self.agendamento)
             self.agendamento = None
         super().destroy()
+
+    def gerar_arquivo(self):
+        pedido = novo_pedido(self.pc)
+        downloads = pasta_downloads()
+        nome = filedialog.asksaveasfilename(parent=self, title="Salvar arquivo deste PC",
+                                            initialdir=downloads, initialfile=pedido.nome_arquivo,
+                                            defaultextension=".json", filetypes=[("Pedido do Auto Farm", "*.json")])
+        if not nome:
+            return
+        caminho = Path(nome)
+        try:
+            caminho.write_bytes(pedido.serializar())
+        except OSError:
+            self.aviso.set("Falha ao gravar o arquivo do PC. Escolha outra pasta.")
+            return
+        self.arquivos_esperados = tuple(pasta / pedido.nome_licenca for pasta in {downloads, caminho.parent})
+        self.ultima_leitura.clear()
+        self.aviso.set(f"Anexe {caminho.name} no formulário do bot. Aguardando a licença em Downloads.")
+        if self.espera_arquivo is None:
+            self.espera_arquivo = self.after(1200, self._procurar_licenca)
+
+    def abrir_licenca(self):
+        nome = filedialog.askopenfilename(parent=self, title="Abrir licença do Discord", initialdir=pasta_downloads(),
+                                          filetypes=[("Licença do Auto Farm", "*.txt"), ("Todos os arquivos", "*.*")])
+        if nome:
+            try:
+                recibo = ler_recibo(Path(nome))
+            except (OSError, ValueError):
+                self.aviso.set("Não consegui ler a licença. Selecione o .txt baixado da resposta do bot.")
+            else:
+                self._validar_e_salvar(recibo)
+
+    def _procurar_licenca(self):
+        self.espera_arquivo = None
+        if self.pedido is None:
+            for caminho in self.arquivos_esperados:
+                try:
+                    recibo = ler_recibo(caminho)
+                except (OSError, ValueError):
+                    continue  # Downloads ainda podem estar em andamento.
+                if self.ultima_leitura.get(caminho) != recibo:
+                    self.ultima_leitura[caminho] = recibo
+                    self._validar_e_salvar(recibo)
+                    if self.licenca is not None:
+                        return
+        self.espera_arquivo = self.after(1200, self._procurar_licenca)
 
     def copiar(self):
         try:
@@ -90,7 +149,7 @@ class JanelaAtivacao(tk.Toplevel):
             self._validar_e_salvar(chave)
 
     def _habilitar_entrada(self, habilitar):
-        for controle in (self.entrada, self.botao_colar, self.botao_ativar):
+        for controle in (self.entrada, self.botao_colar, self.botao_ativar, self.botao_gerar, self.botao_abrir):
             controle.state(["!disabled" if habilitar else "disabled"])
 
     def _receber_ativacao(self):

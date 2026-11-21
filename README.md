@@ -6,7 +6,7 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 
 ## Uso
 
-1. Na tela **Ativar Auto Farm**, cole a chave recebida e clique em **Ativar neste PC**. Uma chave de venda usa a internet na primeira ativação e fica vinculada ao Windows desse PC. As próximas aberturas usam o comprovante salvo. Chaves offline emitidas para um PC específico também são aceitas.
+1. Na tela **Ativar Auto Farm**, use **Gerar arquivo do PC** para ativar pelo Discord ou cole a chave para ativação direta. A chave de venda fica vinculada ao Windows do primeiro PC ativado. As próximas aberturas usam o comprovante salvo.
 2. Deixe o Fortnite em primeiro plano, em modo janela ou tela cheia em janela, e clique em **Iniciar**. **F6** inicia ou pausa.
 3. Use **Testar imagem** para inspecionar um PNG, JPG ou BMP. O diagnóstico marca a caixa e o centro detectados e exibe método e score; essa função nunca envia teclado ou mouse.
 
@@ -65,9 +65,23 @@ Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção de
 2. Escolha a validade e clique em **Gerar chave de venda**. Cada clique gera uma chave nova. Copie e entregue a chave ao comprador por mensagem privada. Até o primeiro uso, quem tiver a chave pode ativá-la.
 3. O comprador ativa a chave no PC em que vai usar o app. O servidor registra uma única máquina por chave, inclusive quando dois PCs tentam ativá-la ao mesmo tempo. O prazo começa no dia da primeira ativação e inclui o último dia, pelo horário de Brasília. Repetir a ativação no mesmo Windows recupera o comprovante com o vencimento original.
 
-Enquanto o servidor estiver privado, a primeira ativação das chaves de venda fica restrita a acessos autorizados. Para atender clientes nesse período, selecione a opção de emissão offline por código do PC. Essas licenças usam o mesmo formato da v3.3.0 e o prazo começa na emissão. A reinstalação do Windows pode alterar o identificador e exigir uma nova licença. Os comprovantes já emitidos continuam válidos até o vencimento.
+Com o servidor privado, o comprador pode ativar pelo Discord. Também existe emissão offline por código do PC, com prazo contado a partir da emissão. A reinstalação do Windows pode alterar o identificador e exigir uma nova licença.
 
 O Windows protege a chave de assinatura do vendedor no perfil que a criou. Para emitir licenças em outro Windows, abra o emissor, use **Restaurar backup** e informe a senha do arquivo exportado. Mantenha o backup e a senha sob seu controle. Quem possuir os dois poderá emitir licenças para este app.
+
+### Ativação pelo Discord
+
+1. No computador em que vai usar o Auto Farm, abra o aplicativo e clique em **Gerar arquivo do PC**. Salve o arquivo `.json`.
+2. No canal de ativação do vendedor, clique em **Ativar**. Cole a chave de compra e anexe o arquivo ao formulário privado.
+3. Baixe o `.txt` da resposta privada em **Downloads**. Com a janela de ativação aberta, o Auto Farm reconhece o arquivo e abre o painel. Se fechou o aplicativo ou salvou em outra pasta, abra-o e selecione **Abrir licença recebida**.
+
+O botão consulta o mesmo registro da ativação direta. Repetir o formulário no mesmo PC recupera a licença. Depois de baixar e instalar a licença, o comprador pode usar o aplicativo offline.
+
+### Bot no Windows do vendedor
+
+Abra o [Bot de Ativação para Discord](https://github.com/danielsolzapo-dev/Token/releases/latest/download/BotAtivacaoDiscord.exe) no Windows que vai atender os pedidos. Na primeira abertura, informe o token do bot e a credencial do serviço de ativação privado. Os dois ficam no Gerenciador de Credenciais do seu usuário do Windows. Para substituí-los, execute o bot com `--configurar`. O bot precisa estar aberto e conectado à internet para atender uma nova ativação.
+
+Instale o bot no servidor como aplicativo de servidor com as permissões **Ver canal**, **Enviar mensagens**, **Anexar arquivos** e **Ler histórico de mensagens**. O bot publica o botão em **#sukinha**, no servidor **Teste**, quando o dono do bot também é dono do servidor e o destino é único. Para indicar o destino explicitamente, copie o link do canal no Discord e abra `BotAtivacaoDiscord.exe --canal "LINK_DO_CANAL"`. O bot guarda os IDs do canal e do painel para reutilizar o mesmo botão após reiniciar. [Portal de Desenvolvedores do Discord](https://discord.com/developers/applications)
 
 ## Desenvolvimento
 

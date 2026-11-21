@@ -143,13 +143,15 @@ class _SemRedirecionar(HTTPRedirectHandler):
         return None
 
 
-def ativar_venda(chave: str, pc: str) -> str:
+def ativar_venda(chave: str, pc: str, *, acesso_servico: str | None = None) -> str:
     chave = chave.strip()
     verificar_venda(chave)
     pc = normalizar_pc(pc)
     requisicao = Request(URL_ATIVACAO, data=json.dumps({"chave": chave, "pc": pc}).encode("utf-8"),
                          headers={"Content-Type": "application/json", "Accept": "application/json",
                                   "User-Agent": "AutoFarm-Ativacao"})
+    if acesso_servico:
+        requisicao.add_unredirected_header("OAI-Sites-Authorization", "Bearer " + acesso_servico)
     try:
         with build_opener(_SemRedirecionar()).open(requisicao, timeout=12) as resposta:
             corpo = resposta.read(2049)
