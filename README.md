@@ -42,6 +42,14 @@ Se aparecer **Esta conta foi banida**, o webhook recebe a captura do aviso. Dura
 
 Em **Regiões por horário**, ative a programação para Construção e Zero Build. O app usa Brasília (UTC−3) e tenta ajustar a região antes de entrar na fila pelo lobby. Das 00h às 06h, usa América do Norte. Das 06h às 11h, você pode escolher Ásia ou Oceania. Das 11h às 18h, usa Europa. Das 18h à meia-noite, você pode escolher Brasil ou América do Norte. A preferência de sub-região fica a cargo da configuração do Fortnite. [Configurações de pareamento da Epic](https://www.epicgames.com/help/c-ategory_fortnite/c-fortnite_gameplay/a10221394)
 
+## Baús do replay
+
+Abra **Baús do replay** no rodapé. O painel lê a última gravação concluída de `%LOCALAPPDATA%\FortniteGame\Saved\Demos` e acompanha as próximas enquanto estiver aberto. Use **Escolher arquivo** para analisar outra partida. A leitura é local e funciona com a automação pausada.
+
+**Você** mostra as aberturas atribuídas ao jogador que gravou o replay. **Esquadrão (inclui você)** soma as aberturas desse jogador e dos colegas identificados na mesma equipe. O leitor verifica a interação de abertura e quem a realizou. Ele exclui adversários, caixas de munição e baús apenas destruídos. O painel informa quando faltou autoria ou cobertura. Uma gravação local pode omitir ações de colegas distantes.
+
+O leitor de replay é compilado a partir de uma revisão fixa do FortniteChestTracker. A release inclui o arquivo `LeitorBaus-fonte.zip` com as fontes correspondentes e as licenças. Para usar o contador ao executar pelo código-fonte, instale o SDK .NET indicado em `leitor_replay/LEIA-ME.txt` e execute `python leitor_replay/compilar.py`. O executável de Windows já inclui o leitor. [Projeto do leitor de replay](https://github.com/Loukious/FortniteChestTracker)
+
 ## Enviar um diagnóstico
 
 1. Reproduza a falha e pressione **F7**. Isso marca o horário no registro da sessão.
@@ -53,11 +61,12 @@ Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção de
 
 ## Desenvolvimento
 
-Use Python 3.14 no Windows. Instale as dependências e prepare os modelos OCR verificados:
+Use Python 3.14 e o SDK .NET 10.0.404 no Windows. Prepare os modelos OCR e compile o leitor de replays.
 
 ```powershell
 py -3.14 -m pip install -r requirements.txt
 py -3.14 preparar_ocr.py
+py -3.14 leitor_replay/compilar.py
 ```
 
 Inicie, teste e compile:
@@ -67,7 +76,7 @@ py -3.14 app.py
 py -3.14 -m unittest discover -s tests -v
 py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py painel_tema.py regiao.py relogio_painel.py tesouros.py texto_tela.py webhook.py windows_game.py
 py -3.14 app.py --verificar-build
-py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" --add-data "fontes;fontes" app.py
+py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" --add-data "fontes;fontes" --add-data "leitor_replay/binario;leitor_replay/binario" app.py
 ```
 
 A interface usa Inter 4.1. As fontes incluídas contêm o conjunto de caracteres do painel e a versão em negrito usa algarismos tabulares. A licença SIL OFL está em `fontes/LICENSE.txt`. [Projeto Inter](https://github.com/rsms/inter)

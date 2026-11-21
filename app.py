@@ -23,6 +23,7 @@ from atualizador import (ErroAtualizacao, baixar_atualizacao, buscar_atualizacao
 from diagnostico import Diagnostico
 from lobby_especial import MonitorLobby
 from logica_autofarm import ACOES_AEREAS, BOTOES_FILA, Config, Detector, Fluxo, TECLAS, TEMPLATES
+from painel_replay import JanelaBaus
 from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, regiao_por_horario, regiao_principal
 from relogio_painel import RelogioPainel
@@ -483,6 +484,7 @@ class Painel:
         self.status_webhook = tk.StringVar(janela, "Webhook configurado" if self.config.webhook_url else "Webhook desativado")
         self.janela_webhook = self.botao_teste_webhook = None
         self.janela_regiao = None
+        self.janela_replay = None
         self.teste_webhook_em_curso = False
         self._pausado_visual = None
         self._proximo_relogio = 0.0
@@ -709,14 +711,22 @@ class Painel:
         self._alinhar_botoes(rodape,
                            self.botao_com_icone(rodape, "Recompensas e webhook", "presente", self.mostrar_webhook),
                            self.botao_com_icone(rodape, "Regiões por horário", "relogio", self.mostrar_regiao))
-        ttk.Label(painel, textvariable=self.status_webhook, style="Info.TLabel",
-                  wraplength=365).pack(anchor="w", pady=(5, 0))
+        ttk.Label(rodape, textvariable=self.status_webhook, style="Info.TLabel",
+                  wraplength=180).grid(row=1, column=0, sticky="w", pady=(5, 0))
+        ttk.Button(rodape, text="Baús do replay", command=self.mostrar_baus_replay).grid(
+            row=1, column=1, sticky="ew", pady=(5, 0))
 
     @staticmethod
     def _alinhar_botoes(pai, *botoes):
         for coluna, botao in enumerate(botoes):
             pai.columnconfigure(coluna, weight=1, uniform="botoes")
             botao.grid(row=0, column=coluna, sticky="ew", padx=(0, 7) if coluna + 1 < len(botoes) else 0)
+
+    def mostrar_baus_replay(self):
+        if self.janela_replay is None or not self.janela_replay.winfo_exists():
+            self.janela_replay = JanelaBaus(self.janela, self.eventos)
+            self.janela_replay.bind("<Map>", lambda _: ajustar_titulo(self.janela_replay, self.config.aparencia != "rosa"))
+        self.janela_replay.abrir()
 
     def mostrar_regiao(self):
         if self.janela_regiao and self.janela_regiao.winfo_exists():
@@ -1176,6 +1186,12 @@ class Painel:
                     self.status.set(valor)
             elif evento == "total":
                 self.total.set(str(valor))
+            elif evento in ("lendo_replay", "baus_replay"):
+                if self.janela_replay and self.janela_replay.winfo_exists():
+                    if evento == "lendo_replay":
+                        self.janela_replay.mostrar_andamento(*valor)
+                    else:
+                        self.janela_replay.mostrar_resultado(*valor)
             elif evento == "prazo_saida":
                 self.relogio.prazo_saida = valor
                 self._proximo_relogio = 0.0
@@ -1240,6 +1256,9 @@ class Painel:
 
 def verificar_build():
     from windows_capture import WindowsCapture
+    if getattr(sys, "frozen", False):
+        from baus_replay import verificar_leitor
+        verificar_leitor()
 
     if not callable(WindowsCapture):
         raise RuntimeError("Captura de janela ausente no pacote.")

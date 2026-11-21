@@ -1,0 +1,86 @@
+--- a/src/FortniteReplayReader/Analysis/ReplayChestAnalysis.cs
++++ b/src/FortniteReplayReader/Analysis/ReplayChestAnalysis.cs
+@@ -55,7 +55,7 @@
+         Update(actor, chestClass, new(searched, pawn, hasPawnUpdate, null, null, 0), time, stableActorPath);
+
+     internal void Update(uint actor, string chestClass, ReplayChestUpdate update, float? time,
+-        string? stableActorPath = null)
++        string? stableActorPath = null, uint? previousSpawnActor = null)
+     {
+         ChestState chest;
+         if (!string.IsNullOrWhiteSpace(stableActorPath) && stableChests.TryGetValue(stableActorPath, out var placedChest))
+@@ -66,7 +66,19 @@
+         }
+         else
+         {
+-            if (!chests.TryGetValue(actor, out chest!)) chests[actor] = chest = new(actor, chestClass);
++            if (!chests.TryGetValue(actor, out chest!))
++            {
++                // Same searching pawn and animation count on an already completed
++                // chest. Resets, destruction, unknown authors and new searches stay separate.
++                if (previousSpawnActor is uint previous && chests.TryGetValue(previous, out var prior) &&
++                    prior.Current is { Searched: true, Destroyed: false } stateBefore &&
++                    update is { Searched: true, HasPawnUpdate: true, SearchingPawn: > 0, SearchAnimationCount: > 0 } &&
++                    update.Destroyed != true && update.SearchingPawn == stateBefore.OpeningPawn &&
++                    update.SearchAnimationCount == stateBefore.AnimationCount)
++                    chest = prior;
++                else chest = new(actor, chestClass);
++                chests[actor] = chest;
++            }
+             if (!string.IsNullOrWhiteSpace(stableActorPath)) stableChests[stableActorPath] = chest;
+         }
+         var state = chest.Current;
+--- a/src/FortniteReplayReader/Analysis/ReplayChestAnalysisReader.cs
++++ b/src/FortniteReplayReader/Analysis/ReplayChestAnalysisReader.cs
+@@ -40,6 +40,41 @@
+     };
+     private static readonly HashSet<string> PawnFields = new(StringComparer.Ordinal) { "PlayerState" };
+     private static readonly HashSet<string> PlaylistFields = new(StringComparer.Ordinal);
++    private readonly record struct BuriedSpawn(string Class, uint? Level, double X, double Y, double Z);
++    private readonly Dictionary<BuriedSpawn, (uint Actor, uint Channel)> buriedActors = [];
++    private readonly Dictionary<uint, float?> openedAt = [];
++
++    protected override void OnChannelOpened(uint channelIndex, NetworkGUID? actor)
++    {
++        base.OnChannelOpened(channelIndex, actor);
++        openedAt[channelIndex] = currentTime;
++    }
++
++    protected override void OnChannelClosed(uint channelIndex, NetworkGUID? actor)
++    {
++        base.OnChannelClosed(channelIndex, actor);
++        openedAt.Remove(channelIndex);
++    }
++
++    // Only a first-frame snapshot of an identically placed buried chest can be a
++    // repeat. Actor GUIDs are reassigned when a dynamic actor becomes relevant again.
++    private uint? PreviousBuriedActor(string chestClass, uint actor, uint channel)
++    {
++        var instance = Channels[channel]?.Actor;
++        if (!chestClass.Contains("BuriedChest", StringComparison.OrdinalIgnoreCase) ||
++            instance?.Archetype?.IsValid() != true || instance.Location is not { } spawn ||
++            !double.IsFinite(spawn.X) || !double.IsFinite(spawn.Y) || !double.IsFinite(spawn.Z) ||
++            (spawn.X == 0 && spawn.Y == 0 && spawn.Z == 0)) return null;
++
++        var key = new BuriedSpawn(chestClass, instance.Level?.Value, spawn.X, spawn.Y, spawn.Z);
++        bool known = buriedActors.TryGetValue(key, out var previous);
++        buriedActors[key] = (actor, channel);
++        if (!known || previous.Actor == actor || currentTime == null ||
++            !openedAt.TryGetValue(channel, out var first) || currentTime != first ||
++            Channels[previous.Channel]?.Actor?.ActorNetGUID.Value == previous.Actor) return null;
++        return previous.Actor;
++    }
++
+     private int searchFieldsDecoded;
+     private int decodeErrors;
+     private int rewardDecodeErrors;
+@@ -246,7 +281,8 @@
+                 var stablePath = _netGuidCache.TryGetPathName(actor, out var path) &&
+                     IsStableChestActorPath(actor, path, Channels[channelIndex]?.Actor?.Archetype?.IsValid() == true)
+                     ? path : null;
+-                chestData.Update(actor, group.PathName, update, currentTime, stablePath);
++                uint? previousSpawnActor = stablePath is null ? PreviousBuriedActor(group.PathName, actor, channelIndex) : null;
++                chestData.Update(actor, group.PathName, update, currentTime, stablePath, previousSpawnActor);
+             }
+             else decodeErrors++;
+             // The opening/destruction update has been decoded; no gameplay chest model is needed.

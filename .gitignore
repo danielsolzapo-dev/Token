@@ -12,3 +12,6 @@ webhook_discord.txt
 modelos/
 .token-update-*
 *.previous
+leitor_replay/binario/
+leitor_replay/bin/
+leitor_replay/obj/

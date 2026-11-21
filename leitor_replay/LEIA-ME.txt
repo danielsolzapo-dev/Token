@@ -1,0 +1,34 @@
+LeitorBaus
+
+O Auto Farm executa LeitorBaus como processo separado para analisar arquivos
+.replay no computador. O executável LeitorBaus é distribuído sob a GNU GPL
+versão 3 ou posterior. A licença integral acompanha o leitor em COPYING.
+
+A versão correspondente do código-fonte está em LeitorBaus-fonte.zip, na
+mesma release do Auto Farm em que o executável foi publicado.
+https://github.com/danielsolzapo-dev/Token/releases
+
+O ZIP inclui o código do leitor, as bibliotecas de leitura e o script de
+compilação. Para recompilar, extraia o ZIP, instale Python 3 e o SDK .NET
+10.0.404 para Windows x64 e execute o seguinte comando na pasta extraída.
+
+    python compilar.py
+
+O executável fica em binario/LeitorBaus.exe. O SDK usa NuGet para restaurar
+suas dependências de compilação. Ao compilar diretamente a partir do GitHub do
+Auto Farm, o script também obtém a revisão indicada abaixo com Git.
+
+O leitor usa FortniteChestTracker de Loukious, derivado de
+FortniteReplayDecompressor de Shiqan (MIT), e o descompactador OozSharp de
+SL-x-TnT e Shiqan, derivado de powzix/ooz (GPL versão 3 ou posterior).
+https://github.com/Loukious/FortniteChestTracker/tree/51815e626214c7ac8fb9b0000da00abcd4b81d2e
+
+Em novembro de 2026, o Auto Farm acrescentou a correção registrada em
+deduplicar.patch para identificar reaparições de um baú durante a mesma
+gravação. O ZIP contém o parser com essa alteração já aplicada.
+
+O runtime .NET 10.0.15 e as bibliotecas Microsoft.Extensions 10.0.11
+acompanham o leitor. Os arquivos DOTNET-MIT.txt e DOTNET-THIRD-PARTY-NOTICES.txt
+contêm as licenças e atribuições incluídas no pacote do runtime.
+https://github.com/dotnet/runtime/tree/v10.0.15
+https://github.com/dotnet/runtime/tree/v10.0.11
