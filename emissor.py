@@ -110,7 +110,14 @@ def provisionar():
 def emitir(pc, expira):
     if expira is not None and expira < date.today():
         raise ValueError("A data final da licença já passou.")
-    carga = licenca.carga_licenca(licenca.normalizar_pc(pc), expira)
+    return _assinar(licenca.carga_licenca(pc, expira))
+
+
+def emitir_venda(dias):
+    return _assinar(licenca.carga_venda(dias))
+
+
+def _assinar(carga):
     chave = _conferir_emissor(_abrir_cofre())
     return licenca.montar_chave(carga, chave.sign(carga))
 
@@ -144,9 +151,9 @@ def restaurar_backup(origem, senha):
 PRAZOS = {"30 dias": 30, "90 dias": 90, "365 dias": 365}
 
 
-def vencimento(prazo, dias, hoje):
+def duracao_em_dias(prazo, dias):
     if prazo == "Vitalícia":
-        return None
+        return 0
     if prazo in PRAZOS:
         quantidade = PRAZOS[prazo]
     else:
@@ -156,8 +163,13 @@ def vencimento(prazo, dias, hoje):
             quantidade = 0
     if not 1 <= quantidade <= 36500:
         raise ValueError("Informe um prazo de 1 a 36.500 dias.")
+    return quantidade
+
+
+def vencimento(prazo, dias, hoje):
+    quantidade = duracao_em_dias(prazo, dias)
     # O próprio dia da emissão já permite usar o aplicativo.
-    return hoje + timedelta(days=quantidade - 1)
+    return hoje + timedelta(days=quantidade - 1) if quantidade else None
 
 
 class Emissor:
@@ -168,15 +180,22 @@ class Emissor:
         painel = ttk.Frame(raiz, padding=20)
         painel.grid(sticky="nsew")
         painel.columnconfigure(0, weight=1)
+        self.offline = tk.BooleanVar(raiz, False)
         self.pc = tk.StringVar(raiz)
         self.prazo = tk.StringVar(raiz, "30 dias")
         self.dias = tk.StringVar(raiz, "30")
         self.resultado = tk.StringVar(raiz)
         self.situacao = tk.StringVar(raiz)
         ttk.Label(painel, text="Emitir licença", font=("Segoe UI", 16, "bold")).grid(sticky="w")
-        ttk.Label(painel, text="Código do PC do cliente").grid(sticky="w", pady=(14, 4))
-        entrada = ttk.Entry(painel, textvariable=self.pc, width=54)
-        entrada.grid(sticky="ew")
+        self.orientacao = ttk.Label(painel, wraplength=420)
+        self.orientacao.grid(sticky="w", pady=(4, 10))
+        ttk.Checkbutton(painel, text="Emitir licença offline para um PC específico",
+                        variable=self.offline).grid(sticky="w")
+        self.dados_pc = ttk.Frame(painel)
+        self.dados_pc.grid(sticky="ew", pady=(8, 0))
+        self.dados_pc.columnconfigure(0, weight=1)
+        ttk.Label(self.dados_pc, text="Código do PC do cliente").grid(sticky="w")
+        ttk.Entry(self.dados_pc, textvariable=self.pc, width=54).grid(sticky="ew")
         opcoes = ttk.Frame(painel)
         opcoes.grid(sticky="w", pady=(12, 0))
         ttk.Label(opcoes, text="Validade").grid(row=0, column=0, sticky="w")
@@ -185,9 +204,10 @@ class Emissor:
         ttk.Label(opcoes, text="Dias").grid(row=0, column=1, sticky="w", padx=(10, 0))
         self.campo_dias = ttk.Entry(opcoes, textvariable=self.dias, width=8, state="disabled")
         self.campo_dias.grid(row=1, column=1, padx=(10, 0))
-        ttk.Button(painel, text="Gerar licença", command=self.gerar).grid(sticky="w", pady=12)
+        self.botao_gerar = ttk.Button(painel, command=self.gerar)
+        self.botao_gerar.grid(sticky="w", pady=12)
         ttk.Label(painel, text="Licença para enviar ao cliente").grid(sticky="w", pady=(0, 4))
-        ttk.Entry(painel, textvariable=self.resultado, state="readonly").grid(sticky="ew")
+        ttk.Entry(painel, textvariable=self.resultado, state="readonly", width=54).grid(sticky="ew")
         self.copiar = ttk.Button(painel, text="Copiar licença", command=self.copiar_licenca, state="disabled")
         self.copiar.grid(sticky="w", pady=(6, 0))
         ttk.Label(painel, textvariable=self.situacao).grid(sticky="w", pady=(4, 0))
@@ -198,7 +218,21 @@ class Emissor:
         ttk.Button(botoes, text="Restaurar backup", command=self.restaurar).grid(row=0, column=1, padx=6)
         for campo in (self.pc, self.dias, self.prazo):
             campo.trace_add("write", self.limpar_resultado)
-        entrada.focus_set()
+        self.offline.trace_add("write", self.alternar_modo)
+        self.alternar_modo()
+        self.botao_gerar.focus_set()
+
+    def alternar_modo(self, *_):
+        if self.offline.get():
+            self.dados_pc.grid()
+            self.orientacao.configure(text="Use o código do PC do cliente. A validade começa hoje.")
+            self.botao_gerar.configure(text="Gerar licença offline")
+        else:
+            self.dados_pc.grid_remove()
+            self.orientacao.configure(text="O primeiro PC que ativar a chave ficará vinculado a ela. "
+                                           "O prazo começa nessa ativação.")
+            self.botao_gerar.configure(text="Gerar chave de venda")
+        self.limpar_resultado()
 
     def limpar_resultado(self, *_):
         self.campo_dias.configure(state="normal" if self.prazo.get() == "Personalizado" else "disabled")
@@ -209,12 +243,20 @@ class Emissor:
     def gerar(self):
         self.limpar_resultado()
         try:
-            expira = vencimento(self.prazo.get(), self.dias.get(), date.today())
-            self.resultado.set(emitir(self.pc.get(), expira))
+            prazo, dias = self.prazo.get(), self.dias.get()
+            if self.offline.get():
+                expira = vencimento(prazo, dias, date.today())
+                chave = emitir(self.pc.get(), expira)
+                situacao = f"Válida até {expira:%d/%m/%Y}, inclusive." if expira else "Licença vitalícia."
+            else:
+                quantidade = duracao_em_dias(prazo, dias)
+                chave = emitir_venda(quantidade)
+                situacao = "Chave de venda gerada. Copie para enviar ao cliente."
         except (OSError, ValueError) as erro:
             messagebox.showerror("Emitir licença", str(erro), parent=self.raiz)
             return
-        self.situacao.set(f"Válida até {expira:%d/%m/%Y}, inclusive." if expira else "Licença vitalícia.")
+        self.resultado.set(chave)
+        self.situacao.set(situacao)
         self.copiar.state(["!disabled"])
 
     def copiar_licenca(self):

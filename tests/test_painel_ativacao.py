@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from threading import Event
 from types import SimpleNamespace
 import tkinter as tk
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -71,6 +72,68 @@ class AtivacaoTest(unittest.TestCase):
             app.main()
             windows.assert_not_called()
             painel.assert_not_called()
+
+    def aguardar_pedido(self, tela):
+        limite = time.monotonic() + 3
+        while tela.pedido is not None and time.monotonic() < limite:
+            self.janela.update()
+            time.sleep(0.005)
+        self.assertIsNone(tela.pedido)
+
+    def test_venda_pede_uma_vez_e_salva_somente_o_recibo_validado(self):
+        tela = JanelaAtivacao(self.janela, "PC")
+        espera = Event()
+        self.addCleanup(espera.set)
+        def responder(*_):
+            espera.wait(3)
+            return "AFA1.recibo"
+        with (patch("licenca.ativar_venda", side_effect=responder) as pedir,
+              patch("painel_ativacao.validar_chave") as validar, patch("painel_ativacao.salvar_chave") as salvar):
+            tela.chave.set("AFV1.venda")
+            tela.ativar()
+            tela.ativar()
+            self.assertTrue(tela.botao_ativar.instate(["disabled"]))
+            salvar.assert_not_called()
+            espera.set()
+            self.aguardar_pedido(tela)
+            pedir.assert_called_once_with("AFV1.venda", "PC")
+            validar.assert_called_once_with("AFA1.recibo", "PC")
+            salvar.assert_called_once_with("AFA1.recibo")
+            self.assertFalse(tela.winfo_exists())
+
+    def test_venda_privada_informa_bloqueio_e_permite_repetir(self):
+        tela = JanelaAtivacao(self.janela, "PC")
+        mensagem = "A ativação externa está indisponível. Consulte o vendedor."
+        with (patch("licenca.ativar_venda", side_effect=[OSError(mensagem), "AFA1.recibo"]) as pedir,
+              patch("painel_ativacao.validar_chave") as validar, patch("painel_ativacao.salvar_chave") as salvar):
+            tela.chave.set("AFV1.venda")
+            tela.ativar()
+            self.aguardar_pedido(tela)
+            self.assertEqual(tela.aviso.get(), mensagem)
+            self.assertFalse(tela.botao_ativar.instate(["disabled"]))
+            salvar.assert_not_called()
+            validar.side_effect = ValueError("Assinatura inválida.")
+            tela.ativar()
+            self.aguardar_pedido(tela)
+            self.assertEqual(pedir.call_count, 2)
+            self.assertIsNone(tela.licenca)
+            salvar.assert_not_called()
+
+    def test_fechar_durante_pedido_nao_grava_nem_agenda_mais_trabalho(self):
+        tela = JanelaAtivacao(self.janela, "PC")
+        espera = Event()
+        self.addCleanup(espera.set)
+        with (patch("licenca.ativar_venda", side_effect=lambda *_: espera.wait(3) and "AFA1.recibo"),
+              patch("painel_ativacao.salvar_chave") as salvar):
+            tela.chave.set("AFV1.venda")
+            tela.ativar()
+            pedido = tela.pedido
+            tela.destroy()
+            espera.set()
+            self.assertEqual(pedido.result(timeout=2), "AFA1.recibo")
+            self.janela.update()
+            self.assertIsNone(tela.agendamento)
+            salvar.assert_not_called()
 
     def test_expiracao_com_sessao_ativa_para_antes_do_atalho_e_aguarda_worker(self):
         painel = app.Painel(self.janela, Mock(), app.Config(atualizar_auto=False),

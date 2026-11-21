@@ -2,7 +2,6 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
-from datetime import date
 import json
 import os
 from pathlib import Path
@@ -25,6 +24,7 @@ from diagnostico import Diagnostico
 from lobby_especial import MonitorLobby
 from logica_autofarm import ACOES_AEREAS, BOTOES_FILA, Config, Detector, Fluxo, TECLAS, TEMPLATES
 from painel_ativacao import obter_licenca
+from licenca import hoje_licenca
 from painel_replay import JanelaBaus
 from painel_tema import APARENCIAS, TemaPainel, ajustar_titulo, carregar_inter
 from regiao import AMERICA_DO_NORTE, MANHA, NOITE, regiao_por_horario, regiao_principal
@@ -462,9 +462,10 @@ def detectar_arquivo(caminho):
 
 
 class Painel:
-    def __init__(self, janela, windows, config=None, diagnostico=None, *, expira=None):
+    def __init__(self, janela, windows, config=None, diagnostico=None, *, expira=None, por_venda=False):
         self.janela, self.windows = janela, windows
         self.expira = expira
+        self.por_venda = por_venda
         self.licenca_expirada = False
         self.diagnostico = diagnostico
         self.config = config if config is not None else carregar_config()
@@ -1169,7 +1170,7 @@ class Painel:
         imagem.pack()
 
     def atualizar(self):
-        if self.expira and date.today() > self.expira and not self.fechando:
+        if self.expira and hoje_licenca(self.por_venda) > self.expira and not self.fechando:
             self.encerrar_por_vencimento()
             return
         agora = time.monotonic()
@@ -1431,7 +1432,7 @@ def executar_painel(janela, licenca):
         diagnostico = Diagnostico(ARQUIVO_LOG)
     except OSError:
         diagnostico = None
-    painel = Painel(janela, windows, diagnostico=diagnostico, expira=licenca.expira)
+    painel = Painel(janela, windows, diagnostico=diagnostico, expira=licenca.expira, por_venda=licenca.por_venda)
     if diagnostico is None:
         painel.atividade.set("O diagnóstico local não pôde ser criado.")
     try:

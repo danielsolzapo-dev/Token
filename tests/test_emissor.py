@@ -27,6 +27,8 @@ class EmissaoTest(unittest.TestCase):
     def test_sem_segredo_nao_emite_nem_cria_um_substituto(self):
         with self.assertRaises(FileNotFoundError):
             emissor.emitir(self.pc, None)
+        with self.assertRaises(FileNotFoundError):
+            emissor.emitir_venda(30)
         with self.assertRaisesRegex(ValueError, "backup"):
             emissor.provisionar()
         self.assertFalse(emissor._cofre().exists())
@@ -93,6 +95,7 @@ class EmissaoTest(unittest.TestCase):
         raiz.withdraw()
         self.addCleanup(raiz.destroy)
         janela = emissor.Emissor(raiz)
+        janela.offline.set(True)
         janela.pc.set(self.pc)
         janela.gerar()
         self.assertEqual(licenca.validar_chave(janela.resultado.get(), self.pc).pc, self.pc)
@@ -104,6 +107,35 @@ class EmissaoTest(unittest.TestCase):
         self.assertEqual(janela.resultado.get(), "")
         janela.gerar()
         self.assertIsNone(licenca.validar_chave(janela.resultado.get(), janela.pc.get()).expira)
+
+    def test_gerar_venda_sem_digitar_nada_emite_chaves_distintas_com_o_prazo_escolhido(self):
+        emissor._guardar_no_perfil(self.simulada)
+        raiz = tk.Tk()
+        raiz.withdraw()
+        self.addCleanup(raiz.destroy)
+        janela = emissor.Emissor(raiz)
+        self.assertFalse(janela.offline.get())
+        self.assertFalse(janela.dados_pc.winfo_manager())
+        janela.botao_gerar.invoke()
+        primeira = janela.resultado.get()
+        self.assertTrue(primeira.startswith("AFV1."))
+        self.assertEqual(licenca.verificar_venda(primeira), 30)
+        janela.botao_gerar.invoke()
+        segunda = janela.resultado.get()
+        self.assertNotEqual(segunda, primeira)
+        self.assertEqual(licenca.verificar_venda(segunda), 30)
+        janela.offline.set(True)
+        self.assertEqual(janela.resultado.get(), "")
+        self.assertEqual(janela.dados_pc.winfo_manager(), "grid")
+        self.assertTrue(janela.copiar.instate(["disabled"]))
+        janela.offline.set(False)
+        janela.prazo.set("Vitalícia")
+        janela.botao_gerar.invoke()
+        self.assertEqual(licenca.verificar_venda(janela.resultado.get()), 0)
+        janela.prazo.set("Personalizado")
+        janela.dias.set("3")
+        janela.botao_gerar.invoke()
+        self.assertEqual(licenca.verificar_venda(janela.resultado.get()), 3)
 
 
 if __name__ == "__main__":

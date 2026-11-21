@@ -6,7 +6,7 @@ Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens 
 
 ## Uso
 
-1. Na tela **Ativar Auto Farm**, clique em **Copiar código** e envie o código ao vendedor. Quando receber sua licença, use **Colar chave** e **Ativar**. A ativação fica salva para a próxima abertura.
+1. Na tela **Ativar Auto Farm**, cole a chave recebida e clique em **Ativar neste PC**. Uma chave de venda usa a internet na primeira ativação e fica vinculada ao Windows desse PC. As próximas aberturas usam o comprovante salvo. Chaves offline emitidas para um PC específico também são aceitas.
 2. Deixe o Fortnite em primeiro plano, em modo janela ou tela cheia em janela, e clique em **Iniciar**. **F6** inicia ou pausa.
 3. Use **Testar imagem** para inspecionar um PNG, JPG ou BMP. O diagnóstico marca a caixa e o centro detectados e exibe método e score; essa função nunca envia teclado ou mouse.
 
@@ -62,10 +62,10 @@ Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção de
 ## Emissão de licenças
 
 1. No Windows do vendedor, abra o [Emissor de Licenças](https://github.com/danielsolzapo-dev/Token/releases/latest/download/EmissorLicencas.exe). Na primeira utilização, use **Exportar backup**, escolha uma senha de pelo menos 12 caracteres e guarde o arquivo `.pem` em local separado do PC. Guarde também a senha em lugar seguro.
-2. Para cada venda, peça ao cliente o código que aparece ao abrir o Auto Farm. Cole-o no emissor e escolha a validade em dias ou **Vitalícia**.
-3. Clique em **Gerar licença**, depois em **Copiar licença** e envie a chave ao cliente em uma mensagem privada. O cliente faz a ativação no PC que gerou o código. Para renovar, emita outra licença para o mesmo código.
+2. Escolha a validade e clique em **Gerar chave de venda**. Cada clique gera uma chave nova. Copie e entregue a chave ao comprador por mensagem privada. Até o primeiro uso, quem tiver a chave pode ativá-la.
+3. O comprador ativa a chave no PC em que vai usar o app. O servidor registra uma única máquina por chave, inclusive quando dois PCs tentam ativá-la ao mesmo tempo. O prazo começa no dia da primeira ativação e inclui o último dia, pelo horário de Brasília. Repetir a ativação no mesmo Windows recupera o comprovante com o vencimento original.
 
-A verificação funciona offline. Uma licença por prazo vale até o fim do dia indicado pelo emissor, conforme o relógio do Windows. Trocar de PC ou reinstalar o Windows pode mudar o código de ativação. Nesses casos, peça o novo código antes de reemitir a licença. Uma licença já entregue continua válida no PC original até vencer. Não há revogação remota.
+Enquanto o servidor estiver privado, a primeira ativação das chaves de venda fica restrita a acessos autorizados. Para atender clientes nesse período, selecione a opção de emissão offline por código do PC. Essas licenças usam o mesmo formato da v3.3.0 e o prazo começa na emissão. A reinstalação do Windows pode alterar o identificador e exigir uma nova licença. Os comprovantes já emitidos continuam válidos até o vencimento.
 
 O Windows protege a chave de assinatura do vendedor no perfil que a criou. Para emitir licenças em outro Windows, abra o emissor, use **Restaurar backup** e informe a senha do arquivo exportado. Mantenha o backup e a senha sob seu controle. Quem possuir os dois poderá emitir licenças para este app.
 

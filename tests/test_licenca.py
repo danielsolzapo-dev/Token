@@ -1,9 +1,12 @@
 import base64
+import hashlib
+import json
 import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -73,3 +76,61 @@ class TesteLicenca(unittest.TestCase):
                 licenca.salvar_chave(self.emitir(expira=date.today()))
             self.assertEqual(licenca.ler_chave(), chave)
             self.assertEqual(list(Path(pasta).rglob("*.tmp")), [])
+
+    def emitir_venda(self, dias=30):
+        carga = licenca.carga_venda(dias)
+        return licenca.montar_chave(carga, self.segredo.sign(carga))
+
+    def test_venda_e_assinada_distinta_e_nao_libera_offline(self):
+        chave = self.emitir_venda()
+        self.assertNotEqual(chave, self.emitir_venda())
+        self.assertEqual(licenca.verificar_venda(chave), 30)
+        with self.assertRaises(ValueError):
+            licenca.validar_chave(chave, PC)
+        for dias in (-1, True, 36501):
+            with self.assertRaises(ValueError):
+                licenca.carga_venda(dias)
+
+    def test_cliente_confere_venda_e_pc_do_recibo_antes_de_aceitar(self):
+        chave = self.emitir_venda(1)
+        servidor = Ed25519PrivateKey.generate()
+        self.enterContext(patch.object(licenca, "CHAVE_SERVIDOR", servidor.public_key().public_bytes_raw()))
+        data = licenca.hoje_licenca(True)
+
+        def responder(venda, pc):
+            carga = (licenca._RECIBO + hashlib.sha256(venda.encode("ascii")).digest()
+                     + bytes.fromhex(pc) + data.toordinal().to_bytes(4, "big"))
+            recibo = licenca.montar_chave(carga, servidor.sign(carga))
+            resposta = MagicMock()
+            resposta.read.return_value = json.dumps({"licenca": recibo}).encode()
+            resposta.headers.get_content_type.return_value = "application/json"
+            abrir.return_value.__enter__.return_value = resposta
+            return recibo
+
+        abrir = self.enterContext(patch("licenca.build_opener")).return_value.open
+        recibo = responder(chave, PC)
+        self.assertEqual(licenca.ativar_venda(chave, PC), recibo)
+        req = abrir.call_args.args[0]
+        self.assertEqual(json.loads(req.data), {"chave": chave, "pc": PC})
+        self.assertEqual(req.full_url, licenca.URL_ATIVACAO)
+        with tempfile.TemporaryDirectory() as pasta, patch.dict("os.environ", LOCALAPPDATA=pasta):
+            licenca.salvar_chave(recibo)
+            self.assertEqual(licenca.validar_chave(licenca.ler_chave(), PC), licenca.Licenca(PC, data, True))
+        with self.assertRaisesRegex(ValueError, "outro PC"):
+            licenca.validar_chave(recibo, OUTRO_PC)
+        responder(self.emitir_venda(1), PC)
+        with self.assertRaisesRegex(ValueError, "comprovante"):
+            licenca.ativar_venda(chave, PC)
+        responder(chave, OUTRO_PC)
+        with self.assertRaisesRegex(ValueError, "outro PC"):
+            licenca.ativar_venda(chave, PC)
+
+    def test_recusa_concorrencia_expiracao_e_servidor_privado(self):
+        venda = self.emitir_venda()
+        abrir = self.enterContext(patch("licenca.build_opener")).return_value.open
+        for codigo, excecao, mensagem in ((409, ValueError, "outro PC"), (410, ValueError, "venceu"),
+                                          (302, OSError, "indisponível"), (403, OSError, "indisponível")):
+            with self.subTest(codigo=codigo):
+                abrir.side_effect = HTTPError(licenca.URL_ATIVACAO, codigo, "", {}, None)
+                with self.assertRaisesRegex(excecao, mensagem):
+                    licenca.ativar_venda(venda, PC)
