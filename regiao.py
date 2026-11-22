@@ -187,6 +187,7 @@ class RegiaoLobby:
         self.sentido = "direita"
         self.alterou = False
         self._alvo_confirmado = False
+        self._prazo_confirmacao_prorrogado = False
         self.proxima = self.prazo = 0.0
         self._assinatura = None
         self._ultima_mudanca = 0.0
@@ -202,9 +203,7 @@ class RegiaoLobby:
             return None
         self.confirmada = None
         self.alvo = alvo
-        # A navegação da aba e a leitura OCR podem levar mais de 100 s em PCs
-        # lentos. O prazo inclui a confirmação posterior no lobby.
-        self.proxima, self.prazo = agora + 0.8, agora + 150
+        self.proxima, self.prazo = agora + 0.8, agora + 95
         self.ultima_submissao = self.fechando = None
         self.valor_anterior = None
         self.tentativas = 0
@@ -212,6 +211,7 @@ class RegiaoLobby:
         self.sentido = "direita"
         self.alterou = False
         self._alvo_confirmado = False
+        self._prazo_confirmacao_prorrogado = False
         self._assinatura, self._ultima_mudanca = None, agora
         self._apontou = self._selecionou = False
         self._esc_social = 1
@@ -276,6 +276,12 @@ class RegiaoLobby:
         if principal:
             if regiao_principal(principal.valor) == self.alvo:
                 self._alvo_confirmado = True
+                if self.alterou and not self._prazo_confirmacao_prorrogado:
+                    # A leitura do destino confirma que o seletor chegou à
+                    # opção pedida; reserva tempo para aplicar, salvar e
+                    # reconhecer o retorno ao lobby em máquinas lentas.
+                    self.prazo = max(self.prazo, agora + 60)
+                    self._prazo_confirmacao_prorrogado = True
                 if self.alterou and self.ultima_submissao is None:
                     self.ultima_submissao = agora
                     self.prazo = max(self.prazo, agora + 14)
