@@ -111,18 +111,18 @@ def ler_tela_regiao(linhas, largura, altura):
                                            "SALVAR ALTERACOES", "APLICAR ALTERACOES", "SETTINGS CHANGED",
                                            "DISCARD CHANGES", "UNSAVED CHANGES"))
                       and 0.2 * altura < l.centro[1] < 0.65 * altura for l, t in rotulos)
+    botoes = [(l, t) for l, t in rotulos if 0.15 * largura < l.centro[0] < 0.85 * largura
+              and 0.45 * altura < l.centro[1] < 0.90 * altura]
+    for salvar, texto in botoes:
+        if texto not in {"SALVAR", "SAVE", "SIM", "YES"}:
+            continue
+        descartar = next((l for l, t in botoes if t in {"NAO SALVAR", "DONT SAVE", "DO NOT SAVE",
+                          "DESCARTAR", "DESCARTAR ALTERACOES", "NAO", "DISCARD", "NO"}
+                          and salvar.centro[0] < l.centro[0]
+                          and abs(salvar.centro[1] - l.centro[1]) <= 0.055 * altura), None)
+        if descartar:
+            return TelaRegiao(descartar=descartar.caixa, salvar=salvar.caixa, dialogo_alteracoes=True)
     if tem_dialogo:
-        botoes = [(l, t) for l, t in rotulos if 0.15 * largura < l.centro[0] < 0.85 * largura
-                  and 0.45 * altura < l.centro[1] < 0.90 * altura]
-        for salvar, texto in botoes:
-            if texto not in {"SALVAR", "SAVE", "SIM", "YES"}:
-                continue
-            descartar = next((l for l, t in botoes if t in {"NAO SALVAR", "DONT SAVE", "DO NOT SAVE",
-                              "DESCARTAR", "DESCARTAR ALTERACOES", "NAO", "DISCARD", "NO"}
-                              and salvar.centro[0] < l.centro[0]
-                              and abs(salvar.centro[1] - l.centro[1]) <= 0.055 * altura), None)
-            if descartar:
-                return TelaRegiao(descartar=descartar.caixa, salvar=salvar.caixa, dialogo_alteracoes=True)
         return TelaRegiao(dialogo_alteracoes=True)
     configuracoes = titulo or bool(voltar and restaurar)
 
@@ -186,6 +186,7 @@ class RegiaoLobby:
         self.visitados = set()
         self.sentido = "direita"
         self.alterou = False
+        self._alvo_confirmado = False
         self.proxima = self.prazo = 0.0
         self._assinatura = None
         self._ultima_mudanca = 0.0
@@ -201,13 +202,16 @@ class RegiaoLobby:
             return None
         self.confirmada = None
         self.alvo = alvo
-        self.proxima, self.prazo = agora + 0.8, agora + 95
+        # A navegação da aba e a leitura OCR podem levar mais de 100 s em PCs
+        # lentos. O prazo inclui a confirmação posterior no lobby.
+        self.proxima, self.prazo = agora + 0.8, agora + 150
         self.ultima_submissao = self.fechando = None
         self.valor_anterior = None
         self.tentativas = 0
         self.visitados.clear()
         self.sentido = "direita"
         self.alterou = False
+        self._alvo_confirmado = False
         self._assinatura, self._ultima_mudanca = None, agora
         self._apontou = self._selecionou = False
         self._esc_social = 1
@@ -251,13 +255,13 @@ class RegiaoLobby:
         if assinatura != self._assinatura:
             self._assinatura, self._ultima_mudanca = assinatura, agora
         if self.fechando is None and (agora >= self.prazo or agora - self._ultima_mudanca >= 14):
-            self.fechando = False
+            self.fechando = self._alvo_confirmado
             self.prazo = agora
         if self.fechando is not None:
-            if agora >= self.prazo + 12:
+            if agora >= self.prazo + 25:
                 return self._terminar(agora, False)
             if tela.dialogo_alteracoes:
-                caixa = tela.salvar if self.fechando else tela.descartar
+                caixa = tela.salvar if self._alvo_confirmado else tela.descartar
                 return self._ordem(agora, "clicar", "salvar" if self.fechando else "descartar", caixa) if caixa else None
             if tela.configuracoes:
                 if tela.voltar:
@@ -266,11 +270,12 @@ class RegiaoLobby:
             if tela.social:
                 return self._ordem(agora, "esc", "fechar_social")
             if lobby:
-                return self._terminar(agora, self.fechando)
+                return self._terminar(agora, bool(self.fechando and self._alvo_confirmado))
             return None
 
         if principal:
             if regiao_principal(principal.valor) == self.alvo:
+                self._alvo_confirmado = True
                 if self.alterou and self.ultima_submissao is None:
                     self.ultima_submissao = agora
                     self.prazo = max(self.prazo, agora + 14)
