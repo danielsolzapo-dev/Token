@@ -75,6 +75,9 @@ class Config:
     aparencia: str = "azul"
     pausar_ao_obter_token: bool = False
     sair_quando_sozinho: bool = True
+    continuar_farmando: bool = False
+    pausar_programado: bool = False
+    pausa_apos_minutos: int = 60
 
 
 @dataclass(frozen=True)
@@ -1068,8 +1071,7 @@ class Fluxo:
             if alvo:
                 return self._clicar_e_verificar(alvo, quadro)
         alvo = None
-        if (self.config.resgatar_recompensas and not (partida or sem_controle or no_onibus or asa_delta)
-                and (cursor or self._prazo_lobby is not None)):
+        if self.config.resgatar_recompensas and not (partida or sem_controle or no_onibus or asa_delta):
             alvo = self.detector.recompensa(quadro)
         alvo = alvo or self.detector.detectar(quadro)
         if alvo:

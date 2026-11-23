@@ -2,7 +2,7 @@
 
 Aplicativo desktop independente para Windows x64. Usa capturas da tela, imagens de referência locais e OCR para reconhecer estados visíveis do Fortnite; não lê memória do jogo, injeta DLLs nem tenta ocultar entradas do anti-cheat.
 
-[Baixar AutoFarmTokenPirata.exe para Windows](https://github.com/danielsolzapo-dev/Token/releases/latest/download/AutoFarmTokenPirata.exe)
+[Releases do Auto Farm](https://github.com/danielsolzapo-dev/Token/releases)
 
 ## Uso
 
@@ -28,11 +28,11 @@ O anti-AFK mantém **W** nas caminhadas e alterna diagonais com **A** e **D**. C
 
 O tempo padrão é 7,5 minutos. A opção **Voltar ao lobby se só eu restar no esquadrão ou na partida** vem ligada e funciona mesmo com a saída por tempo desligada. Com o seu personagem vivo, o app procura os indicadores de eliminação de todos os companheiros reconhecidos ou o número **1** ao lado do ícone de jogadores restantes. Três leituras consecutivas, separadas por pelo menos um segundo, iniciam a volta ao lobby. Se os nomes ou as barras apenas sumirem, o app continua na partida e aguarda uma leitura conclusiva.
 
-**Próxima saída** mostra a contagem regressiva do prazo usado pela saída automática. O painel mostra um traço quando a automação está pausada ou não há saída programada. **Farmando** soma o tempo ativo desde que o app foi aberto, incluindo lobby e fila, e congela durante as pausas.
+**Próxima saída** mostra a contagem regressiva do prazo usado pela saída automática. O painel mostra um traço quando a automação está pausada ou não há saída programada. **Farmando** soma o tempo ativo desde que o app foi aberto, incluindo lobby e fila, e congela durante as pausas. O total de partidas é salvo neste PC. Em **Programação**, **Continuar o cronômetro Farmando ao reabrir** mantém o tempo acumulado entre aberturas; desligado, o tempo começa em zero na próxima abertura. **Pausar no lobby após** agenda uma pausa segura: ao atingir o prazo, o app aguarda reconhecer **Jogar** ou **Pronto** antes de parar.
 
 **Atualizar automaticamente** consulta as releases do GitHub ao abrir e a cada hora. Quando o app fica pausado, o atualizador valida o tamanho e o SHA-256 do executável, guarda a versão anterior como `.previous` e reinicia o app. Use **Verificar** para consultar manualmente.
 
-Em **Recompensas e webhook**, você pode ativar o resgate quando a tela de itens adquiridos aparecer antes de uma nova fila. Cole a URL HTTPS do Discord ou de um endpoint compatível com seus anexos e clique em **Salvar**. Depois que o botão de resgate some, o app envia a captura do Fortnite feita antes do clique e o nome lido na tela. Se o nome estiver ilegível, o aviso informa isso e envia a captura. **Testar com tela atual** aguarda três segundos e envia a imagem do Fortnite em primeiro plano ou do monitor principal, com o nome de teste escolhido. [Formato do webhook do Discord](https://docs.discord.com/developers/resources/webhook#execute-webhook)
+Em **Recompensas e webhook**, você pode ativar o resgate automático quando uma tela de recompensa aparecer no lobby, incluindo “Tesouro encontrado”. Cole a URL HTTPS do Discord ou de um endpoint compatível com seus anexos e clique em **Salvar**. Depois que o botão de resgate some, o app envia a captura do Fortnite feita antes do clique e o nome lido na tela. Se o nome estiver ilegível, o aviso informa isso e envia a captura. **Testar com tela atual** aguarda três segundos e envia a imagem do Fortnite em primeiro plano ou do monitor principal, com o nome de teste escolhido. [Formato do webhook do Discord](https://docs.discord.com/developers/resources/webhook#execute-webhook)
 
 Marque **Notificar tesouros elementais encontrados** para receber avisos de descoberta no mesmo webhook. O alerta inclui uma captura do Fortnite e identifica o Acelerador de Extração, o Extrator Portátil, os Fogos de Artifício Dourados, o Localizador de Elementais ou o Localizador da Sorte quando o ícone está legível.
 
@@ -44,7 +44,7 @@ Em **Regiões por horário**, ative a programação para Construção e Zero Bui
 
 ## Baús do replay
 
-Abra **Baús do replay** no rodapé. O painel lê a última gravação concluída de `%LOCALAPPDATA%\FortniteGame\Saved\Demos` e acompanha as próximas enquanto estiver aberto. Use **Escolher arquivo** para analisar outra partida. A leitura é local e funciona com a automação pausada.
+Abra **Baús do replay** no rodapé. O app lê a última gravação concluída de `%LOCALAPPDATA%\FortniteGame\Saved\Demos` e acompanha as próximas enquanto estiver aberto, mesmo com o painel de baús fechado. O histórico local mostra o total do esquadrão de hoje, o melhor dia, o recorde e a média por partida, além de um gráfico dos últimos sete dias. Use **Escolher arquivo** para analisar outra partida; arquivos selecionados manualmente não são contabilizados novamente no histórico. A leitura é local e funciona com a automação pausada.
 
 **Você** mostra as aberturas atribuídas ao jogador que gravou o replay. **Esquadrão (inclui você)** soma as aberturas desse jogador e dos colegas identificados na mesma equipe. O leitor verifica a interação de abertura e quem a realizou. Ele exclui adversários, caixas de munição e baús apenas destruídos. O painel informa quando faltou autoria ou cobertura. Uma gravação local pode omitir ações de colegas distantes.
 
@@ -61,9 +61,12 @@ Os ajustes ficam em `%LOCALAPPDATA%\AutoFarmToken\ajustes.json`. A detecção de
 
 ## Emissão de licenças
 
-1. No Windows do vendedor, abra o [Emissor de Licenças](https://github.com/danielsolzapo-dev/Token/releases/latest/download/EmissorLicencas.exe). Na primeira utilização, use **Exportar backup**, escolha uma senha de pelo menos 12 caracteres e guarde o arquivo `.pem` em local separado do PC. Guarde também a senha em lugar seguro.
+1. Abra o [Emissor de Licenças](https://github.com/danielsolzapo-dev/Token/releases/latest/download/EmissorLicencas.exe) no Windows e perfil do vendedor que já contém a chave do emissor. Use **Exportar backup**, escolha uma senha de pelo menos 12 caracteres e guarde o `.pem` e a senha em locais seguros. Em outro Windows/perfil, use **Restaurar backup**. Não há provisionamento automático em uma instalação limpa; sem o cofre original ou o backup, não será possível emitir chaves compatíveis com os clientes já distribuídos.
 2. Escolha a validade e clique em **Gerar chave de venda**. Cada clique gera uma chave nova. Copie e entregue a chave ao comprador por mensagem privada. Até o primeiro uso, quem tiver a chave pode ativá-la.
+   Para preparar um lote, clique em **Gerar várias chaves de venda**, informe a quantidade e salve o arquivo `.txt`. Cada linha contém uma chave independente com a validade selecionada. A geração em lote é para chaves de venda; licenças offline continuam exigindo um código de PC por chave.
 3. O comprador ativa a chave no PC em que vai usar o app. O servidor registra uma única máquina por chave, inclusive quando dois PCs tentam ativá-la ao mesmo tempo. O prazo começa no dia da primeira ativação e inclui o último dia, pelo horário de Brasília. Repetir a ativação no mesmo Windows recupera o comprovante com o vencimento original.
+
+Esta é a versão principal do Auto Farm. O atualizador e os executáveis desta página pertencem ao repositório comercial.
 
 Com o servidor privado, o comprador pode ativar pelo Discord. Também existe emissão offline por código do PC, com prazo contado a partir da emissão. A reinstalação do Windows pode alterar o identificador e exigir uma nova licença.
 
@@ -81,7 +84,7 @@ O botão consulta o mesmo registro da ativação direta. Repetir o formulário n
 
 Abra o [Bot de Ativação para Discord](https://github.com/danielsolzapo-dev/Token/releases/latest/download/BotAtivacaoDiscord.exe) no Windows que vai atender os pedidos. Na primeira abertura, informe o token do bot e a credencial do serviço de ativação privado. Os dois ficam no Gerenciador de Credenciais do seu usuário do Windows. Para substituí-los, execute o bot com `--configurar`. O bot precisa estar aberto e conectado à internet para atender uma nova ativação.
 
-Instale o bot no servidor como aplicativo de servidor com as permissões **Ver canal**, **Enviar mensagens**, **Anexar arquivos** e **Ler histórico de mensagens**. O bot publica o botão em **#sukinha**, no servidor **Teste**, quando o dono do bot também é dono do servidor e o destino é único. Para indicar o destino explicitamente, copie o link do canal no Discord e abra `BotAtivacaoDiscord.exe --canal "LINK_DO_CANAL"`. O bot guarda os IDs do canal e do painel para reutilizar o mesmo botão após reiniciar. [Portal de Desenvolvedores do Discord](https://discord.com/developers/applications)
+Instale o bot no servidor com **Ver canal**, **Enviar mensagens**, **Anexar arquivos**, **Ler histórico**, **Gerenciar canais** e **Gerenciar webhooks**. No canal de configuração, clique em **Criar meu canal e webhook**. O bot cria um canal visível ao cliente e aos administradores do servidor, envia uma confirmação nele e mostra a URL do webhook em uma resposta privada. Cole a URL em **Recompensas e webhook** no Auto Farm. A URL é uma credencial: não a publique nem compartilhe. O painel de ativação continua no canal configurado com `--canal`. [Portal de Desenvolvedores do Discord](https://discord.com/developers/applications)
 
 ## Desenvolvimento
 
@@ -98,7 +101,7 @@ Inicie, teste e compile:
 ```powershell
 py -3.14 app.py
 py -3.14 -m unittest discover -s tests -v
-py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py logica_autofarm.py painel_tema.py regiao.py relogio_painel.py tesouros.py texto_tela.py webhook.py windows_game.py
+py -3.14 -m py_compile app.py atualizador.py diagnostico.py embarque.py estado_local.py historico_baus.py logica_autofarm.py painel_replay.py painel_tema.py regiao.py relogio_painel.py tesouros.py texto_tela.py webhook.py windows_game.py
 py -3.14 app.py --verificar-build
 py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name AutoFarmTokenPirata --collect-all rapidocr --copy-metadata rapidocr --add-data "modelos;modelos" --add-data "templates;templates" --add-data "fontes;fontes" --add-data "leitor_replay/binario;leitor_replay/binario" app.py
 py -3.14 -m PyInstaller --noconfirm --onefile --windowed --name EmissorLicencas emissor.py
